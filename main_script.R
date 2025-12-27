@@ -3,16 +3,15 @@
 #TODO:Ask bzgl Split bereits VOR ausschluss von ids mit geringer varianz, missings etc? 
 
 
-
 #todo
-# Opt_hpo_resuluts anschauen, imemr noch überall n_lag 7? 
+# Opt_hpo_resuluts anschauen, immer noch überall n_lag 7? 
 #   Anzahl bäume? Nodesize? 
 #   
 #   Überlegen: wieso überall systematische überschätzung geringer werte und unterschätzung hoher werte Zu bias, response scale ist … schlauch..hecks kommentar noch mal durchdenken
 # 
 # 
 # 
-# Diskuiteren, funkt nicht mal bei meinen daten 
+# Diskutieren, funkt nicht mal bei meinen daten 
 # Residual plots  predicted statt observed 
 # 
 # Keine runde sache wenn ich über warnsysteme etc spreche und dann einen datensatz zu psych flexibilität nehme? 
@@ -390,6 +389,8 @@ time_col <- "counter"
 target_item <- "positive_physical_health_behavior"
 y_test_raw <- raw_data_long_imp %>% filter(item == target_item, counter %in% c(val_counters, test_counters))
 
+
+
 val_metrics <- tibble() # tibble for accuracy metrics per HPO combination 
 # Lambda-Grid-Search
 lambda_grid <- 10^seq(1, -4, length.out = 50)  
@@ -401,7 +402,8 @@ for (n_lags_i in seq(1, 7, 1)) { # optimize n lags
     id_col=id_col, 
     time_col=time_col, 
     target_col=target_item, 
-    num_lags=n_lags_i
+    n_lags=n_lags_i,
+    numeric_features = features_to_lag
   ) #create df for every n_lag in n_lag_i
   
   for (alpha_i in seq(0, 1, 0.5)) {
@@ -519,7 +521,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
                 id_col=id_col, 
                 time_col=time_col, 
                 target_col=target_item, 
-                num_lags=n_lags_i,
+                n_lags=n_lags_i,
                 numeric_features=features_to_lag
               )
               
@@ -728,7 +730,7 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
       id_col=id_col, 
       time_col=time_col, 
       target_col=target_item, 
-      num_lags=n_lags_i,
+      n_lags=n_lags_i,
       numeric_features=features_to_lag
     )
     
@@ -1016,7 +1018,7 @@ for (id_i in unique(df_hpo$id)) {
       id_col=id_col, 
       time_col=time_col, 
       target_col=target_item, 
-      num_lags=n_lags_i,
+      n_lags=n_lags_i,
       numeric_features=features_to_lag
       )
   
@@ -1191,7 +1193,7 @@ for (id_i in unique(df_hpo$id)) {
     id_col = id_col,
     time_col = time_col,
     target_col = target_item,
-    num_lags = n_lags_i,
+    n_lags = n_lags_i,
     numeric_features=features_to_lag
   )
   
@@ -1516,8 +1518,6 @@ tab <- tibble(
 
 # convert to LaTeX
 kable(tab, format = "latex", booktabs = TRUE, digits = 3)
-
-
 
 
 # ---------------- results per id ----------------------
