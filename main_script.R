@@ -387,32 +387,27 @@ mean(raw_data_long_eval %>% filter(id == unique(raw_data_long_eval$id)[1], item 
 id_col <- "id"
 time_col <- "counter"
 target_item <- "positive_physical_health_behavior"
+
 y_test_raw <- raw_data_long_imp %>% filter(item == target_item, counter %in% c(val_counters, test_counters))
-
-
-
-val_metrics <- tibble() # tibble for accuracy metrics per HPO combination 
 # Lambda-Grid-Search
 lambda_grid <- 10^seq(1, -4, length.out = 50)  
 
-for (n_lags_i in seq(1, 7, 1)) { # optimize n lags
-  # optimize regularization ( 0 = ridge, 1 = lasso, 0 < alpha < 1 = elastic net)
+val_metrics <- tibble() # tibble for accuracy metrics per HPO combination
+i_iter = 0
+for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
   df_hpo_i <- create_lag_features(
     df=df_hpo, 
     id_col=id_col, 
     time_col=time_col, 
     target_col=target_item, 
     n_lags=n_lags_i,
-    numeric_features = features_to_lag
-  ) #create df for every n_lag in n_lag_i
+    numeric_features=features_to_lag
+  )
   
-  for (alpha_i in seq(0, 1, 0.5)) {
-    
+  for (alpha_i in seq(0, 1, 0.5)) { # Optimize regularization ( 0 = ridge, 1 = lasso, 0 < alpha < 1 = elastic net)
     for (lambda_i in seq_along(lambda_grid)) {
       
       lambda <- lambda_grid[lambda_i]
-      
-      
       # Fit glm and predict targets per id
       for (id_i in unique(df_hpo_i$id)) {
         # CAVE: wird unten überschrieben mit train_val
@@ -428,18 +423,18 @@ for (n_lags_i in seq(1, 7, 1)) { # optimize n lags
         glm_fit <- glmnet(
           X_train, y_train,
           alpha = alpha_i,
-          lambda = lambda,
-          standardize = FALSE
+          standardize = FALSE,
+          lambda = lambda_i
         )
         
         
-        preds_hpo <- as.vector(predict(glm_fit, newx = X_test, s = lambda)) # do NOT use cv.glmnet --> does not take into account that preds are time series
+        preds_hpo <- as.vector(predict(glm_fit, newx = X_test)) # do NOT use cv.glmnet --> does not take into account that preds are time series
         # • “lambda.min”: the λ at which the smallest MSE is achieved. (with CV)
         # • “lambda.1se”: the largest λ at which the MSE is within one standard error of the smallest MSE (default).
         
         # Undo standardization
-        mean_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$mean
-        sd_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$sd
+        mean_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$mean_hpo
+        sd_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$sd_hpo
         preds_hpo <- preds_hpo * sd_ + mean_
         
         # Undo detrending/differencing
@@ -456,15 +451,15 @@ for (n_lags_i in seq(1, 7, 1)) { # optimize n lags
         val_metrics_i <- val_metrics_i %>% mutate(id = id_i, 
                                                   n_lags=n_lags_i,
                                                   alpha=alpha_i,
-                                                  lambda = lambda)
+                                                  lambda=lambda_i)
         val_metrics <- bind_rows(val_metrics, val_metrics_i)
-        
       }
     }
   }
 }
 
 length(unique(df_hpo_i$id))
+
 
 
 # Save hps per id which maximize accuracy
