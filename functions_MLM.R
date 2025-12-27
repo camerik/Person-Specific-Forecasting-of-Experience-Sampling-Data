@@ -1,3 +1,35 @@
+interpolate <- function(df, counters, interpolation_type="spline", min_value=0, max_value=100) {
+  if (interpolation_type == "linear") {
+    df_inter <- df %>%
+      group_by(id, item) %>%
+      mutate(
+        value = ifelse(
+          counter %in% counters, # training and val set
+          na.approx(value, x = counter, na.rm = FALSE), 
+          value  # keep original value otherwise
+        ),
+        value = pmin(pmax(value, min_value), max_value)
+      ) %>%
+      ungroup()
+  } else if (interpolation_type == "spline") {
+    df_inter <- df %>%
+      group_by(id, item) %>%
+      mutate(
+        value = ifelse(
+          counter %in% counters,
+          na.spline(value, x = counter),  # interpolate only for train_counters
+          value
+        ),
+        value = pmin(pmax(value, min_value), max_value) # allowed range eingrenzen 
+      ) %>%
+      ungroup()
+  } else {
+    stop("Interpolation type not implemented!")
+  }
+  return(df_inter)
+}
+
+
 
 
 adf_flow <- function(x,
