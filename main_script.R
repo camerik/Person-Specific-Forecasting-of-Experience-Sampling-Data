@@ -1,49 +1,92 @@
-# Initialize renv 
-#renv::init
-# 0. Load in packages
+############################################### Questions #######################################################
+
+#TODO:Ask bzgl Split bereits VOR ausschluss von ids mit geringer varianz, missings etc? 
+
+
+
+#todo
+# Opt_hpo_resuluts anschauen, imemr noch überall n_lag 7? 
+#   Anzahl bäume? Nodesize? 
+#   
+#   Überlegen: wieso überall systematische überschätzung geringer werte und unterschätzung hoher werte Zu bias, response scale ist … schlauch..hecks kommentar noch mal durchdenken
+# 
+# 
+# 
+# Diskuiteren, funkt nicht mal bei meinen daten 
+# Residual plots  predicted statt observed 
+# 
+# Keine runde sache wenn ich über warnsysteme etc spreche und dann einen datensatz zu psych flexibilität nehme? 
+#   
+#   Gab es anker bei fragestellung? Slider der direkt bei 50 war? 
+  
+
+############################################### Initialization ##########################################################
+
+# Initialize renv, load functions and set seed for reproducability
 packages <- c("dplyr", "tidyr", "zoo", "purrr", "Metrics", "ggplot2", "glmnet", "coin",
               "openesm", "quantregForest", "kableExtra")
-
 lapply(packages, function(x) {
   if (!require(x, character.only = TRUE)) {
     install.packages(x, dependencies = TRUE)
   }
   library(x, character.only = TRUE)
 })
-
-#citation()
-#renv::snapshot()
-
-# 1. Load functions_MLM and set random seed
 source("functions_MLM.R")
 set.seed(42)
 
-# 2. Load dataset from openesm 
+# Load dataset from openesm, from csv file or RData file 
 #data_file = openesm::get_dataset("0008_westhoff")
 #raw_data = data_file$data
+#load("raw_data.RData")
 
-
+#raw_data = read.csv("0008_westhoff.csv")
 load("raw_data.RData")
-
-# n ids raw
 n_id_1 = length(unique(raw_data$id))
-
-#TODO: Ask: Unsicher bzgl. fehlender Präreg.. (-->multi-step forecast) 
-#TODO:Ask bzgl Split bereits VOR ausschluss von ids mit geringer varianz, missings etc? 
 
 ############################################# Preprocessing #############################################################
 
-# 3. Drop columns not required for forecasting
-cols_to_drop <- c("scheduled_time", "response_time", "weekday", 
+# Drop columns not required for forecasting
+cols_to_drop <- c("scheduled_time", "response_time",
                   "location_latitude", "location_longitude", "start_date", 
-                  "end_date", "duration_in_seconds", "beep", "finished", "sleep_duration",
-                  "sleep_quality", "day") 
-
+                  "end_date", "duration_in_seconds", "finished", "sleep_duration") 
 raw_data <- raw_data %>% select(-all_of(cols_to_drop))
 
+# Transform weekday to numbers and fill NAs
+weekday_map <- c("Monday"=0,"Tuesday"=1,"Wednesday"=2,"Thursday"=3,"Friday"=4,"Saturday"=5,"Sunday"=6)
+raw_data$weekday <- weekday_map[raw_data$weekday]
+for (i in 2:(nrow(raw_data))) {
+  if (is.na(raw_data$weekday[i])) {
+    raw_data$weekday[i] = ifelse(
+      raw_data$beep[i] == 1, 
+      (raw_data$weekday[i - 1] + 1) %% 7, 
+      raw_data$weekday[i - 1]
+    )
+  }
+}
+
+# CAVE: daily variable file for NAs per day fill missings with values of sleep quality of that day
+raw_data <- raw_data %>%
+  group_by(id, day) %>%                      
+  mutate(across(
+    all_of(c("sleep_quality")),# nur auffüllen, wenn es mind. einen observed Wert gibt
+    # denselben Wert auf alle beeps des Tages verteilen
+    
+    ~ if (any(!is.na(.x))) {
+      rep(first(na.omit(.x)), length(.x))
+    } else {
+      .x # sonst NA lassen (wird probleme geben bei interpolation, PRO TAG interpolieren)
+
+    }
+  )) %>%
+  ungroup()
+raw_data <- raw_data %>% select(-day) # Remove day afterwards
 
 # Character string with item/feature names (all colnames except id and counter)
 feature_names = setdiff(colnames(raw_data), c("id", "counter"))
+beep_feature_names = setdiff(colnames(raw_data), c("id", "counter", "weekday", "sleep_quality", "day"))
+daily_feature_names = c("weekday", "sleep_quality")
+features_to_lag = setdiff(colnames(raw_data), c("id", "counter", "weekday", "day", "beep", "sleep_quality"))
+features_to_lag
 
 # range answer categories (all items have the same possible answer categories 0-100)
 range_answer_cat =  raw_data %>%
@@ -51,9 +94,7 @@ range_answer_cat =  raw_data %>%
   unlist() %>%
   range(na.rm = TRUE)
 
-
-# 4.  Calculate in-person statistics and plot counts of answers per item over all ids
-## Westhoff et al., 2024
+# Calculate in-person statistics and plot counts of answers per item over all ids (Westhoff et al., 2024)
 data_statistics = raw_data %>%
   dplyr::group_by(id) %>%
   dplyr::summarize(across(all_of(feature_names),
@@ -69,23 +110,14 @@ raw_data %>%
   dplyr::select(all_of(feature_names[13:16])) %>%
   tidyr::pivot_longer(cols = everything()) %>%
   ggplot(aes(x = value)) +
-  geom_histogram(bins=14) +
+  geom_histogram(bins=20, na.rm=TRUE) +
   facet_grid(~ name) +
   theme_classic()
 
-# in 4 chosen items: modus of negative items tends to be at 0/lower answer categories
-# while positive items tend to have their modus at higher answer categories
-# TODO: Ask: antwortkategorien des target-item nicht normalverteilt
-# nach schätzung schauen wie die residuen verteilt sind? wahrscheinlich annahme verletzt,
-# dass diese normalverteilt sind --> 
-
-
 #TODO: in MA beschreiben wieso ich nur ein target item verwendet habe
 
-# 4. Check for ids with low variance: 
-#  try variance ≥ 1 because ≥ 10 unique answer categories is arbitrary 
-# if else schleife: entweder cutoff variance < 1 oder  ≥ 10 unique answer categories
-
+# Check for and exclude ids with low variance: 
+# Cutoff: variance < 1 or ≥ 10 unique answer categories
 def_low_var <- "one"
 if (def_low_var == "ten_unique") {
      # n unique answer categories per id per item
@@ -123,8 +155,9 @@ if (def_low_var == "ten_unique") {
 }
 
 
-# 5. Remove ids with too many missing rows (!) (based on 2*std more than the mean of missing complete rows
+# Remove ids with too many missing rows (!) (based on 2*std more than the mean of missing complete rows
 # per id)
+beep_feature_names
 
 # pivot longer
 raw_data_long = raw_data %>%
@@ -134,7 +167,7 @@ raw_data_long = raw_data %>%
 raw_data_long_missing_rows <- raw_data %>%
   mutate(
     row_missing = if_else(
-      if_all(all_of(feature_names), is.na), TRUE, FALSE
+      if_all(setdiff(beep_feature_names, "beep"), is.na), TRUE, FALSE
     )
   )
 
@@ -174,10 +207,9 @@ n_id_3 = length(unique(raw_data$id))
 # excludes 5 participants
 
 
-# 6. Compute consecutive missing rows per id  and exclude ids with 
+# Compute consecutive missing rows per id  and exclude ids with 
 # more than 5 consecutive missing rows (one whole day)
 cutoff_cons_miss = 5
-
 
 consecutive_missing <- raw_data_long_missing_rows %>%
   arrange(id, counter) %>%
@@ -212,16 +244,12 @@ raw_data <- raw_data %>%
 
 
 n_id_4 = length(unique(raw_data_long$id))
-# does not exclude any participant
-
+# excludes one participant
 
 # check 
 length(unique(raw_data$id)) == length(unique(raw_data_long$id))
 
-# TODO: Remove raw_data_long to clean up disk space? use rm(dataframe) to remove!
-
-
-# 7. Split dataset into Train, Validation (for HPO) and Test-Dataset while considering temporal order
+# Split dataset into Train, Validation (for HPO) and Test-Dataset while considering temporal order
 n_obs <- length(unique(raw_data$counter))
 n_val <- 15 # 3 days
 n_test <- 15 # 3 days 
@@ -232,77 +260,40 @@ train_val_counters <- union(train_counters, val_counters)
 test_counters <- seq(n_train + n_val + 1, n_obs, 1)
 
 
-# 8. Remove people with NAs in test data
-# TODO: Ask how to deal with missings in test data, it excludes 44 participants!
-# Unterscheidung zwischen missings in exogenen Prädiktoren und missings in kriterium? 
-# nur IDs mit fehlenden kritwerten excluden
-# Es fehlen entweder ganze Zeilen oder nichts! --> alle excluden? kann glmnet mit fehlenden Zeilen 
-# umgehen? 
-
+# Remove people with NAs in test data
 ids_with_nas <- raw_data_long %>%
   filter(counter %in% test_counters) %>%
-  #filter(item == "depressed") %>% 
   group_by(id) %>% # over all items!
   summarise(has_na = any(is.na(value))) %>%
   filter(has_na) %>%
   pull(id)
 
-ids_with_nas
 
 raw_data_long <-  raw_data_long %>% filter(!(id %in% ids_with_nas))
 raw_data <- raw_data %>% filter(!(id %in% ids_with_nas))
 #check 
 n_id_5 = length(unique(raw_data_long$id))
-# excludes 44 participants!
+# n_id_5=37
 
 
-# 9. Interpolate training set only for HPO and later train+val for final evaluation on test set 
-# ALSO: TODO: same for stationarity transformation
+# TODO: Interpolate with different strategy? Check for strategy which takes seasonality into account or 
+# search for papers which investigated impact of imputation strategy on forecast accuracy and uncertainty
+interpolation_type = "spline"
+
+# Source for AR(1)-DF-Test and Stationarity Transformations:
+# Ryan et al. (2025) (adf_flow in diagnose_trend_type)
 
 
-#Interpolate with different strategy? 
 
 
-interpolation_type = "spline" # check for strategy which takes seasonality into account or 
-                              # search for papers which investigated impact of imputation strategy
-                              # on forecast accuracy and uncertainty
-max_value = 100
-min_value = 0
-
-
-if (interpolation_type == "linear") {
-  raw_data_long_imp <- raw_data_long %>%
-    group_by(id, item) %>%
-    mutate(
-      value = ifelse(
-        counter %in% train_counters, # training set only
-        na.approx(value, x = counter, na.rm = FALSE), 
-        value  # keep original value otherwise
-      ),
-      value = pmin(pmax(value, min_value), max_value)
-    ) %>%
-    ungroup()
-} else if (interpolation_type == "spline") {
-  raw_data_long_imp <- raw_data_long %>%
-    group_by(id, item) %>%
-    mutate(
-      value = ifelse(
-        counter %in% train_counters,
-        na.spline(value, x = counter),  # interpolate only for train_counters
-        value
-      ),
-      value = pmin(pmax(value, min_value), max_value) # allowed range eingrenzen 
-    ) %>%
-    ungroup()
-} else {
-  stop("Interpolation type not implemented!")
-}
+#################################### Prepare Data for HPO ######################################
+# Interpolate
+raw_data_long_imp <- interpolate(raw_data_long, train_counters, interpolation_type)
 
 # Check if there are any NAs left
 sum(is.na(raw_data_long_imp %>% filter(counter %in% train_counters)))
 
-
-# lets see how many Ids there are with missings in validation set 
+# Diagnose IDs with missings in val data
 ids_with_nas_val <- raw_data_long_imp %>%
   filter(counter %in% val_counters) %>%
   group_by(id) %>% 
@@ -310,107 +301,128 @@ ids_with_nas_val <- raw_data_long_imp %>%
   filter(has_na) %>%
   pull(id)
 
-length(unique(ids_with_nas_val))
-#15
-
-# exclude for now 
-
+# Remove IDs with missings in val data
 raw_data_long_imp <- raw_data_long_imp %>%
   filter (!( id %in% ids_with_nas_val))
-
 length(unique(raw_data_long_imp$id))
-# final n = 22
 
-# Save test data RAW (+ define target_item)
-target_item <- "positive_physical_health_behavior" # TODO: change up target item, cause its distrib. is very skewed
-y_test_raw <- raw_data_long_imp %>% filter(item == target_item, counter %in% c(val_counters, test_counters))
-
-# 10. AR(1)-DF-Test and Stationarity Transformations
-
-# functions for detecting trend type from Ryan et al. (2025) (adf_flow in diagnose_trend_type)
-
+# Compute detrending components to detrend data
 trend_parameter_hpo <- diagnose_trend_type(raw_data_long_imp %>% filter(counter %in% train_counters))
-raw_data_long_imp <- diff_and_detrend(raw_data_long_imp, trend_parameter_hpo) #diff and detrend whole dataset
-# TODO: check if this is best practice
 
+# Diff and detrend whole dataset
+raw_data_long_imp_hpo <- diff_and_detrend(raw_data_long_imp, trend_parameter_hpo)
 
-
-# 11. Scale data for HPO only based on train counters (later repeat on train_val_counters for test
-# set evaluation)
-
-#compute mean and sd per id and item 
-std_stats_hpo = raw_data_long_imp %>% filter(counter %in% train_counters) %>%
+# Compute mean and sd for scaling data
+std_stats_hpo = raw_data_long_imp_hpo %>% filter(counter %in% train_counters) %>%
   group_by(id, item) %>%
   summarise(
-    mean = mean(value, na.rm = TRUE),
-    sd   = sd(value, na.rm = TRUE),
+    mean_hpo = mean(value, na.rm = TRUE),
+    sd_hpo   = sd(value, na.rm = TRUE),
     .groups = "drop"
   )
 
-# scale
-raw_data_long_hpo <- raw_data_long_imp %>%
+# Scale Data
+raw_data_long_hpo <- raw_data_long_imp_hpo %>%
   left_join(std_stats_hpo, by = c("id", "item")) %>%
-  mutate(value = (value - mean) / sd) %>%
-  dplyr::select(-mean, -sd)
+  mutate(value = (value - mean_hpo) / sd_hpo) %>%
+  dplyr::select(-mean_hpo, -sd_hpo)
 
-
-# 12. create a data frame for HPO (wide format)
+# Create a data frame for HPO (wide format)
 df_hpo <- raw_data_long_hpo %>%
   pivot_wider(names_from = item, values_from = value) %>%
   arrange(id, counter)
 
 # Test if data is standardized correctly
-mean((df_hpo %>% filter(id == unique(df_hpo$id)[1], counter %in% train_counters))$depressed)
+mean(raw_data_long_hpo %>% filter(id == unique(raw_data_long_hpo$id)[1], item == "depressed", counter %in% train_counters) %>% dplyr::pull(value))
+
+
+
+
+
+################################### Prepare Data for Eval ###########################################
+# Interpolate
+raw_data_long_imp2 <- interpolate(raw_data_long, train_val_counters, interpolation_type)
+
+# Check if there are any NAs left
+sum(is.na(raw_data_long_imp2 %>% filter(counter %in% train_val_counters)))
+
+# Remove IDs with missings in val data
+raw_data_long_imp2 <- raw_data_long_imp2 %>%
+  filter (!(id %in% ids_with_nas_val)) 
+length(unique(raw_data_long_imp2$id))
+
+# Compute detrending components to detrend data
+trend_parameter_eval <- diagnose_trend_type(raw_data_long_imp2 %>% filter(counter %in% train_val_counters))
+
+# Diff and detrend whole dataset
+raw_data_long_imp_eval <- diff_and_detrend(raw_data_long_imp2, trend_parameter_eval)
+
+# Compute mean and sd for scaling data
+std_stats_eval = raw_data_long_imp_eval %>% filter(counter %in% train_val_counters) %>%
+  group_by(id, item) %>%
+  summarise(
+    mean_eval = mean(value, na.rm = TRUE),
+    sd_eval   = sd(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Scale Data
+raw_data_long_eval <- raw_data_long_imp_eval %>%
+  left_join(std_stats_eval, by = c("id", "item")) %>%
+  mutate(value = (value - mean_eval) / sd_eval) %>%
+  dplyr::select(-mean_eval, -sd_eval)
+
+# Create a data frame for HPO (wide format)
+df_eval <- raw_data_long_eval %>%
+  pivot_wider(names_from = item, values_from = value) %>%
+  arrange(id, counter)
+
+# Test if data is standardized correctly
+mean(raw_data_long_eval %>% filter(id == unique(raw_data_long_eval$id)[1], item == "depressed", counter %in% train_val_counters) %>% dplyr::pull(value))
+
 
 
 #########################################################################################################################
-#  13. Time-series holdout (effizienter als CV)
-
-# TODO: Ask if implementing TSCV is worth it 
-# schätzzeit viel höher durch 15 * n_id mal models die geschätzt werden müssen
-# aber: konzeptuell eig mein ziel dass die modellparameter durch neue info (ema werte des aktuellen tages
-# beeinflusst werden)
-
-############################################# HPO for Linear Forecast ###################################################
+# Regularized Linear Regression with lagged features and bootstrapping for uncertainty estimation
+########################################################################################################################
 id_col <- "id"
 time_col <- "counter"
+target_item <- "positive_physical_health_behavior"
+y_test_raw <- raw_data_long_imp %>% filter(item == target_item, counter %in% c(val_counters, test_counters))
 
-??glmnet
-
-# TODO: Adapt sequences
 val_metrics <- tibble() # tibble for accuracy metrics per HPO combination 
 # Lambda-Grid-Search
-lambda_grid <- 10^seq(1, -4, length.out = 50)  # 50 Logarithmisch verteilte Werte im bereich zwischen 10^1 und 10^-4
+lambda_grid <- 10^seq(1, -4, length.out = 50)  
 
 for (n_lags_i in seq(1, 7, 1)) { # optimize n lags
-   # optimize regularization ( 0 = ridge, 1 = lasso, 0 < alpha < 1 = elastic net)
-    df_hpo_i <- create_lag_features(
-      df=df_hpo, 
-      id_col=id_col, 
-      time_col=time_col, 
-      target_col=target_item, 
-      num_lags=n_lags_i
-    ) #create df for every n_lag in n_lag_i
+  # optimize regularization ( 0 = ridge, 1 = lasso, 0 < alpha < 1 = elastic net)
+  df_hpo_i <- create_lag_features(
+    df=df_hpo, 
+    id_col=id_col, 
+    time_col=time_col, 
+    target_col=target_item, 
+    num_lags=n_lags_i
+  ) #create df for every n_lag in n_lag_i
+  
+  for (alpha_i in seq(0, 1, 0.5)) {
     
-    for (alpha_i in seq(0, 1, 0.5)) {
-    
-       for (lambda_i in seq_along(lambda_grid)) {
-         
-              lambda <- lambda_grid[lambda_i]
-    
-    
-        # Fit glm and predict targets per id
-    for (id_i in unique(df_hpo_i$id)) {
-      # CAVE: wird unten überschrieben mit train_val
-      X_train <- as.matrix(df_hpo_i %>% filter(counter %in% train_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-      y_train <- as.matrix(df_hpo_i %>% filter(counter %in% train_counters, id == id_i) %>% dplyr::select(target_item, -id))
-    # CAVE: test dataset means val dataset in HPO
-      X_test <- as.matrix(df_hpo_i %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-      y_test <- as.matrix(y_test_raw %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(value))
+    for (lambda_i in seq_along(lambda_grid)) {
       
-      set.seed(47)
+      lambda <- lambda_grid[lambda_i]
       
-      # lamda opt
+      
+      # Fit glm and predict targets per id
+      for (id_i in unique(df_hpo_i$id)) {
+        # CAVE: wird unten überschrieben mit train_val
+        X_train <- as.matrix(df_hpo_i %>% filter(counter %in% train_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+        y_train <- as.matrix(df_hpo_i %>% filter(counter %in% train_counters, id == id_i) %>% dplyr::select(target_item, -id))
+        # CAVE: test dataset means val dataset in HPO
+        X_test <- as.matrix(df_hpo_i %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+        y_test <- as.matrix(y_test_raw %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(value))
+        
+        set.seed(47)
+        
+        # lamda opt
         glm_fit <- glmnet(
           X_train, y_train,
           alpha = alpha_i,
@@ -418,33 +430,33 @@ for (n_lags_i in seq(1, 7, 1)) { # optimize n lags
           standardize = FALSE
         )
         
-
-      preds_hpo <- as.vector(predict(glm_fit, newx = X_test, s = lambda)) # do NOT use cv.glmnet --> does not take into account that preds are time series
-      # • “lambda.min”: the λ at which the smallest MSE is achieved. (with CV)
-      # • “lambda.1se”: the largest λ at which the MSE is within one standard error of the smallest MSE (default).
-      
-      # Undo standardization
-      mean_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$mean
-      sd_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$sd
-      preds_hpo <- preds_hpo * sd_ + mean_
-
-      # Undo detrending/differencing
-      transformation_hpo <- trend_parameter_hpo %>%
-        filter(id == id_i, item == target_item) %>%
-        pull(transformation)
-      params_hpo <- trend_parameter_hpo %>%
-        filter(id == id_i, item == target_item) %>%
-        pull(params)
-      preds_hpo <- undo_diff_and_detrend_single(preds_hpo, val_counters, transformation_hpo, params_hpo)
-
-      # compute accuracy metrics
-      val_metrics_i <- compute_metrics(preds_hpo, y_test) # TODO: außerhalb der schleife überprüfen ob code richtig läuft
-      val_metrics_i <- val_metrics_i %>% mutate(id = id_i, 
-                                                n_lags=n_lags_i,
-                                                alpha=alpha_i,
-                                                lambda = lambda)
-      val_metrics <- bind_rows(val_metrics, val_metrics_i)
-      
+        
+        preds_hpo <- as.vector(predict(glm_fit, newx = X_test, s = lambda)) # do NOT use cv.glmnet --> does not take into account that preds are time series
+        # • “lambda.min”: the λ at which the smallest MSE is achieved. (with CV)
+        # • “lambda.1se”: the largest λ at which the MSE is within one standard error of the smallest MSE (default).
+        
+        # Undo standardization
+        mean_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$mean
+        sd_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$sd
+        preds_hpo <- preds_hpo * sd_ + mean_
+        
+        # Undo detrending/differencing
+        transformation_hpo <- trend_parameter_hpo %>%
+          filter(id == id_i, item == target_item) %>%
+          pull(transformation)
+        params_hpo <- trend_parameter_hpo %>%
+          filter(id == id_i, item == target_item) %>%
+          pull(params)
+        preds_hpo <- undo_diff_and_detrend_single(preds_hpo, val_counters, transformation_hpo, params_hpo)
+        
+        # compute accuracy metrics
+        val_metrics_i <- compute_metrics(preds_hpo, y_test) # TODO: außerhalb der schleife überprüfen ob code richtig läuft
+        val_metrics_i <- val_metrics_i %>% mutate(id = id_i, 
+                                                  n_lags=n_lags_i,
+                                                  alpha=alpha_i,
+                                                  lambda = lambda)
+        val_metrics <- bind_rows(val_metrics, val_metrics_i)
+        
       }
     }
   }
@@ -461,6 +473,7 @@ opt_hps <- val_metrics %>%
   slice_head(n = 1) %>% # debug: multiple HP combo solutions for min-RMSE per id, arbitrarily take the first HP combo 
   ungroup() %>% 
   dplyr::select(id, n_lags, alpha, lambda, RMSE, sMAPE, MAE)
+
 
 # save as apa style table
 # Format numeric columns APA-style
@@ -488,78 +501,6 @@ opt_hps <- val_metrics %>%
 #
 
 ################################################# Linear Forecast #######################################################
-# 14. Interpolate train and val set 
-# bei linearer interpolation sollte das keinen Unterschied machen, bei spline? 
-
-interpolation_type = "spline" # TODO: search for a strategy which takes seasonality into account
-#                               or --> limitations--> paper which vergleicht different strategies 
-#                               and their impaxt on forecasting accuracy and uncertainty
-max_value = 100
-min_value = 0
-
-if (interpolation_type == "linear") {
-  raw_data_long_imp2 <- raw_data_long %>% #NOT raw_data_long_imp
-    group_by(id, item) %>%
-    mutate(
-      value = ifelse(
-        counter %in% train_val_counters,
-        na.approx(value, x = counter, na.rm = FALSE),  # interpolate only in train counters
-        value  # keep original value otherwise
-      ),
-      value = pmin(pmax(value, min_value), max_value)
-    ) %>%
-    ungroup()
-} else if (interpolation_type == "spline") {
-  raw_data_long_imp2 <- raw_data_long %>%
-    group_by(id, item) %>%
-    mutate(
-      value = ifelse(
-        counter %in% train_val_counters,
-        na.spline(value, x = counter),  # interpolate only for train_counters
-        value
-      ),
-      value = pmin(pmax(value, min_value), max_value)
-    ) %>%
-    ungroup()
-} else {
-  stop("Interpolation type not implemented!")
-}
-
-# Check if there are any NAs left
-sum(is.na(raw_data_long_imp2 %>% filter(counter %in% train_val_counters)))
-
-# 15. AR(1)-DF-Test and Stationarity Transformations based on training AND validation set
-
-# functions for detecting trend type from Ryan et al. (2025) (adf_flow in diagnose_trend_type)
-
-trend_parameter <- diagnose_trend_type(raw_data_long_imp2 %>% filter(counter %in% train_val_counters))
-raw_data_long_imp_dd <- diff_and_detrend(raw_data_long_imp2, trend_parameter) #diff and detrend whole dataset
-# TODO: check if this is best practice
-
-
-# Scale data based on mean and sd of training + validation set 
-
-# compute mean and sd based on training and validation set 
-std_stats = raw_data_long_imp_dd %>% filter(counter %in% train_val_counters) %>%
-  group_by(id, item) %>%
-  summarise(
-    mean = mean(value, na.rm = TRUE),
-    sd   = sd(value, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-# scale whole dataset (including test set)
-raw_data_long_eval <- raw_data_long_imp_dd %>%
-  left_join(std_stats, by = c("id", "item")) %>%
-  mutate(value = (value - mean) / sd) %>%
-  dplyr::select(-mean, -sd)
-
-
-# Create wide format dataset with scaled features (mean + sd based on training and validation set)
-df_eval <- raw_data_long_eval %>%
-  pivot_wider(names_from = item, values_from = value) %>%
-  arrange(id, counter)
-
 
 # Fit glm and predict target_item per id
 test_metrics <- tibble() # for accuracy metrics
@@ -570,8 +511,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               # Get optimal HPs per id
               alpha_i <- (opt_hps %>% filter(id == id_i))$alpha
               n_lags_i <- (opt_hps %>% filter(id == id_i))$n_lags
-              lambda_opt_i <- (opt_hps %>% filter (id == id_i))$lambda
-              
+              lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
               
               # create wide format dataset with lagged features
               df_eval_i <- create_lag_features( # own function to create lagged df 
@@ -579,7 +519,8 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
                 id_col=id_col, 
                 time_col=time_col, 
                 target_col=target_item, 
-                num_lags=n_lags_i
+                num_lags=n_lags_i,
+                numeric_features=features_to_lag
               )
               
               ## so one row contains id, counter, target_item at that counter-time,
@@ -598,7 +539,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               
               set.seed(47)
               
-              glm_fit <- glmnet(X_train, y_train, alpha = alpha_i, standardize = FALSE, trace.it = T, lambda = lambda_opt_i) #data is already z-transformed
+              glm_fit <- glmnet(X_train, y_train, alpha = alpha_i, standardize = FALSE, trace.it = T, lambda=lambda_i) #data is already z-transformed
               
               # save number of non zero coefficients and coefficients
               glm_summary <- capture.output(print(glm_fit)) %>% paste(collapse = "\n")
@@ -609,21 +550,19 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               coef_df$term <- rownames(coef_df)
               rownames(coef_df) <- NULL
               
-              
               # save predictions
               preds <- as.vector(predict(glm_fit, newx = X_test)) 
               
               # Undo standardization
-              mean <- (std_stats %>% filter(id == id_i, item == target_item))$mean
-              sd <- (std_stats %>% filter(id == id_i, item == target_item))$sd
-              preds <- preds * sd + mean
-              print(preds)
-              
+              mean_ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$mean_eval
+              sd_ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$sd_eval
+              preds <- preds * sd_ + mean_
+
               # Undo detrending/differencing
-              transformation <- trend_parameter %>%
+              transformation <- trend_parameter_eval %>%
                 filter(id == id_i, item == target_item) %>%
                 pull(transformation)
-              params <- trend_parameter %>%
+              params <- trend_parameter_eval %>%
                 filter(id == id_i, item == target_item) %>%
                 pull(params)
               preds <- undo_diff_and_detrend_single(preds, test_counters, transformation, params)
@@ -654,7 +593,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
                   id = id_i,
                   alpha = alpha_i,
                   n_lags = n_lags_i,
-                  lambda_opt = lambda_opt_i,
+                  lambda=lambda_i,
                   glm_summary = glm_summary,
                   coef_table = list(coef_df)   
                 ))
@@ -772,7 +711,7 @@ perm_test
 # 
 
 
-n_bootstrap <- 500 # change for final eval 
+n_bootstrap <- 100 # change for final eval 
 
 
 # Fit glm and predict target item per id
@@ -782,14 +721,15 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
     # Get optimal HPs per id
     alpha_i <- (opt_hps %>% filter(id == id_i))$alpha
     n_lags_i <- (opt_hps %>% filter(id == id_i))$n_lags
-    lambda_opt_i <- (opt_hps %>% filter (id == id_i))$lambda
-    
+    lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
+
     df_eval_i <- create_lag_features( #create lagged dataset
       df=df_eval, 
       id_col=id_col, 
       time_col=time_col, 
       target_col=target_item, 
-      num_lags=n_lags_i
+      num_lags=n_lags_i,
+      numeric_features=features_to_lag
     )
     
     # Split lagged dataset
@@ -812,22 +752,21 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
       y_sample <- y_train[sample_idx] #should have 90 - n_lags values
       
       # Fit glm to bootstrap sample
-      
-      glm_fit <- glmnet(X_sample, y_sample, alpha = alpha_i, standardize = FALSE, trace.it = T, lambda = lambda_opt_i) # Already STD
+      glm_fit <- glmnet(X_sample, y_sample, alpha = alpha_i, standardize = FALSE, trace.it = T, lambda=lambda_i) # Already STD
       
       # Predict on test set using a set lambda
       preds <- predict(glm_fit, newx = X_test)
       
       # Undo standardization
-      mean___ <- (std_stats %>% filter(id == id_i, item == target_item))$mean
-      sd___ <- (std_stats %>% filter(id == id_i, item == target_item))$sd
+      mean___ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$mean_eval
+      sd___ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$sd_eval
       preds <- preds * sd___ + mean___
       
       # Undo detrending/differencing
-      transformation <- trend_parameter %>%
+      transformation <- trend_parameter_eval %>%
         filter(id == id_i, item == target_item) %>%
         pull(transformation)
-      params <- trend_parameter %>%
+      params <- trend_parameter_eval %>%
         filter(id == id_i, item == target_item) %>%
         pull(params)
       preds <- undo_diff_and_detrend_single(preds, test_counters, transformation, params)
@@ -846,7 +785,7 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
   
   # Compute metrics
   test_metrics_i <- compute_metrics(y_test, mean_preds, pred_lower, pred_upper)
-  test_metrics_i <- test_metrics_i %>% mutate(id = id_i, n_lags=n_lags_i, alpha=alpha_i)
+  test_metrics_i <- test_metrics_i %>% mutate(id = id_i, n_lags=n_lags_i, alpha=alpha_i, lambda=lambda_i)
   test_metrics_boot <- bind_rows(test_metrics_boot, test_metrics_i)
   
   
@@ -1077,7 +1016,8 @@ for (id_i in unique(df_hpo$id)) {
       id_col=id_col, 
       time_col=time_col, 
       target_col=target_item, 
-      num_lags=n_lags_i
+      num_lags=n_lags_i,
+      numeric_features=features_to_lag
       )
   
   
@@ -1140,10 +1080,10 @@ for (id_i in unique(df_hpo$id)) {
     
     
     # Undo standardization
-    mean_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$mean
-    sd_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$sd
+    mean_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$mean_hpo
+    sd_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$sd_hpo
     preds_hpo_RFR <- preds_hpo_RFR * sd_ + mean_
-    print(preds_hpo_RFR)
+    #print(preds_hpo_RFR)
     
     # Undo detrending/differencing 
     transformation_hpo <- trend_parameter_hpo %>%
@@ -1189,6 +1129,8 @@ for (id_i in unique(df_hpo$id)) {
       RMSE     = best_hpo$RMSE
     )
   )
+  
+  print("One Iteration of RFR HPO Done.")
   
 }
 # ergebnistabelle
@@ -1249,7 +1191,8 @@ for (id_i in unique(df_hpo$id)) {
     id_col = id_col,
     time_col = time_col,
     target_col = target_item,
-    num_lags = n_lags_i
+    num_lags = n_lags_i,
+    numeric_features=features_to_lag
   )
   
   #  design matrices 
@@ -1287,8 +1230,8 @@ for (id_i in unique(df_hpo$id)) {
   pred_upper   <- predict(qrf_fit, X_test, what = 0.975)
   
   #  Undo standardization 
-  mu_i <- std_stats %>% filter(id == id_i, item == target_item) %>% pull(mean)
-  sigma_i <- std_stats %>% filter(id == id_i, item == target_item) %>% pull(sd)
+  mu_i <- std_stats_eval %>% filter(id == id_i, item == target_item) %>% pull(mean_eval)
+  sigma_i <- std_stats_eval %>% filter(id == id_i, item == target_item) %>% pull(sd_eval)
   
   preds <- median_preds * sigma_i + mu_i
   
@@ -1296,11 +1239,11 @@ for (id_i in unique(df_hpo$id)) {
   pred_upper <- pred_upper * sigma_i + mu_i
   
   # Undo detrending/differencing 
-  transformation_i <- trend_parameter %>%
+  transformation_i <- trend_parameter_eval %>%
     filter(id == id_i, item == target_item) %>%
     pull(transformation)
   
-  params_i <- trend_parameter %>%
+  params_i <- trend_parameter_eval %>%
     filter(id == id_i, item == target_item) %>%
     pull(params)
   
@@ -1431,26 +1374,14 @@ for (example_id in unique(test_metrics_RFR$id)[6:10]) {
 
 ### residual plot rlr bs
 #----------------------------------------------------------------------------------------
-ggplot(test_predictions_boot, aes(x = y_test[,1], y = median_preds)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
-  facet_wrap(~ id, scales = "free") +
-  labs(
-    x = "Observed",
-    y = "Predicted",
-    title = "Observed vs Predict per ID"
-  ) +
-  theme_minimal()
-
-
 test_predictions_boot <- test_predictions_boot %>%
   mutate(resid = y_test[,1] - median_preds)
 
-ggplot(test_predictions_boot, aes(x = y_test[,1], y = resid)) +
+ggplot(test_predictions_boot, aes(x = median_preds, y = resid)) +
   geom_point(alpha = 0.4) +
   geom_hline(yintercept = 0, linetype = "dashed") +
   labs(
-    x = "Observed",
+    x = "Predicted",
     y = "Residual (Observed – Predicted)",
     title = "Residual Plot RLR - BS"
   ) +
@@ -1459,7 +1390,7 @@ ggplot(test_predictions_boot, aes(x = y_test[,1], y = resid)) +
 
 
 
-ggplot(test_predictions_boot, aes(x = y_test[,1], y = resid)) +
+ggplot(test_predictions_boot, aes(x = median_preds, y = resid)) +
   
 # Punktwolke
 geom_point(aes(color = abs(resid)),
@@ -1475,7 +1406,7 @@ geom_point(aes(color = abs(resid)),
                        name = "|Residual|") +
   
   labs(
-    x = "Observed value",
+    x = "Predicted value",
     y = "Residual (Observed – Predicted)",
     title = "Residual Plot RLR-BS",
     subtitle = "systematic over- and underestimation"
@@ -1491,26 +1422,14 @@ geom_point(aes(color = abs(resid)),
 #----------------------------------------------------------------------------------------
 # resudual plot RFR 
 
-ggplot(test_predictions_RFR, aes(x = y_test[,1], y = median_preds)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
-  facet_wrap(~ id, scales = "free") +
-  labs(
-    x = "Observed",
-    y = "Predicted",
-    title = "Observed vs Predict per ID"
-  ) +
-  theme_minimal()
-
-
 test_predictions_RFR <- test_predictions_RFR %>%
   mutate(resid = y_test[,1] - median_preds)
 
-ggplot(test_predictions_RFR, aes(x = y_test[,1], y = resid)) +
+ggplot(test_predictions_RFR, aes(x = median_preds, y = resid)) +
   geom_point(alpha = 0.4) +
   geom_hline(yintercept = 0, linetype = "dashed") +
   labs(
-    x = "Observed",
+    x = "Predicted",
     y = "Residual (Observed – Predicted)",
     title = "Residual plot RFR"
   ) +
@@ -1519,7 +1438,7 @@ ggplot(test_predictions_RFR, aes(x = y_test[,1], y = resid)) +
 
 
 
-ggplot(test_predictions_RFR, aes(x = y_test[,1], y = resid)) +
+ggplot(test_predictions_RFR, aes(x = median_preds, y = resid)) +
   
   # Punktwolke
   geom_point(aes(color = abs(resid)),
@@ -1535,7 +1454,7 @@ ggplot(test_predictions_RFR, aes(x = y_test[,1], y = resid)) +
                        name = "|Residual|") +
   
   labs(
-    x = "Observed value",
+    x = "Predicted value",
     y = "Residual (Observed – Predicted)",
     title = "Residual Plot RFR",
     subtitle = "systematic over- and underestimation"
@@ -1548,12 +1467,7 @@ ggplot(test_predictions_RFR, aes(x = y_test[,1], y = resid)) +
     panel.grid.minor = element_blank()
   )
 
-
-
-
 #----------------------------------------------------------------------------------------------------
-
-
 
 # tabelle accuracy und UQ
 tab <- tibble(
