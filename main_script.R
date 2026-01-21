@@ -1,15 +1,13 @@
 ############################################### Questions #######################################################
 
-#TODO:Ask bzgl Split bereits VOR ausschluss von ids mit geringer varianz, missings etc? 
+#TODO:Ask bzgl. split bereits VOR ausschluss von ids mit geringer varianz, missings etc? 
 
 
-#todo
+# TODO:
 # Opt_hpo_resuluts anschauen, immer noch überall n_lag 7? 
 #   Anzahl bäume? Nodesize? 
 #   
 #   Überlegen: wieso überall systematische überschätzung geringer werte und unterschätzung hoher werte Zu bias, response scale ist … schlauch..hecks kommentar noch mal durchdenken
-# 
-# 
 # 
 # Diskutieren, funkt nicht mal bei meinen daten 
 # Residual plots  predicted statt observed 
@@ -31,6 +29,9 @@ lapply(packages, function(x) {
   library(x, character.only = TRUE)
 })
 source("functions_MLM.R")
+
+.libPaths()
+
 set.seed(42)
 
 # Load dataset from openesm, from csv file or RData file 
@@ -114,6 +115,22 @@ raw_data %>%
   theme_classic()
 
 #TODO: in MA beschreiben wieso ich nur ein target item verwendet habe
+
+
+#TODO: log transformation for skewed data
+raw_data %>%
+  dplyr::select(all_of(feature_names)) %>%
+  dplyr::mutate(across(
+    everything(),
+    log1p
+  )) %>%
+  tidyr::pivot_longer(cols = everything()) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 20, na.rm = TRUE) +
+  facet_wrap(~ name, scales = "free_x") +
+  theme_classic() +
+  labs(x = "log(1 + x)", y = "Count")
+
 
 # Check for and exclude ids with low variance: 
 # Cutoff: variance < 1 or ≥ 10 unique answer categories
@@ -206,7 +223,7 @@ n_id_3 = length(unique(raw_data$id))
 # excludes 5 participants
 
 
-# Compute consecutive missing rows per id  and exclude ids with 
+# Compute consecutive missing rows per id and exclude ids with 
 # more than 5 consecutive missing rows (one whole day)
 cutoff_cons_miss = 5
 
@@ -335,9 +352,6 @@ df_hpo <- raw_data_long_hpo %>%
 mean(raw_data_long_hpo %>% filter(id == unique(raw_data_long_hpo$id)[1], item == "depressed", counter %in% train_counters) %>% dplyr::pull(value))
 
 
-
-
-
 ################################### Prepare Data for Eval ###########################################
 # Interpolate
 raw_data_long_imp2 <- interpolate(raw_data_long, train_val_counters, interpolation_type)
@@ -388,9 +402,11 @@ id_col <- "id"
 time_col <- "counter"
 target_item <- "positive_physical_health_behavior"
 
+
+
 y_test_raw <- raw_data_long_imp %>% filter(item == target_item, counter %in% c(val_counters, test_counters))
 # Lambda-Grid-Search
-lambda_grid <- 10^seq(1, -4, length.out = 50)  
+#lambda_grid <- 10^seq(1, -4, length.out = 50)  
 
 val_metrics <- tibble() # tibble for accuracy metrics per HPO combination
 i_iter = 0
@@ -405,9 +421,9 @@ for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
   )
   
   for (alpha_i in seq(0, 1, 0.5)) { # Optimize regularization ( 0 = ridge, 1 = lasso, 0 < alpha < 1 = elastic net)
-    for (lambda_i in seq_along(lambda_grid)) {
+    #for (lambda_i in seq_along(lambda_grid)) {
       
-      lambda <- lambda_grid[lambda_i]
+      #lambda <- lambda_grid[lambda_i]
       # Fit glm and predict targets per id
       for (id_i in unique(df_hpo_i$id)) {
         # CAVE: wird unten überschrieben mit train_val
@@ -419,16 +435,19 @@ for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
         
         set.seed(47)
         
-        # lamda opt
-        glm_fit <- glmnet(
+        # lambda opt
+        glm_fit <- cv.glmnet(
           X_train, y_train,
           alpha = alpha_i,
           standardize = FALSE,
-          lambda = lambda_i
+          type.measure = "mse", 
+          nfolds = 10 
+          #lambda = lambda_i
         )
+        print(glm_fit)
         
         
-        preds_hpo <- as.vector(predict(glm_fit, newx = X_test)) # do NOT use cv.glmnet --> does not take into account that preds are time series
+        preds_hpo <- as.vector(predict(glm_fit, newx = X_test, s = "lambda.min")) # do NOT use cv.glmnet --> does not take into account that preds are time series
         # • “lambda.min”: the λ at which the smallest MSE is achieved. (with CV)
         # • “lambda.1se”: the largest λ at which the MSE is within one standard error of the smallest MSE (default).
         
@@ -451,15 +470,17 @@ for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
         val_metrics_i <- val_metrics_i %>% mutate(id = id_i, 
                                                   n_lags=n_lags_i,
                                                   alpha=alpha_i,
-                                                  lambda=lambda_i)
+                                                 lambda = glm_fit$lambda.min)
+        
         val_metrics <- bind_rows(val_metrics, val_metrics_i)
       }
     }
   }
-}
+
 
 length(unique(df_hpo_i$id))
 
+glm_fit$lambda.min
 
 
 # Save hps per id which maximize accuracy
@@ -469,7 +490,7 @@ opt_hps <- val_metrics %>%
   filter(.data[[optim_criteria]] == min(.data[[optim_criteria]], na.rm = TRUE)) %>%
   slice_head(n = 1) %>% # debug: multiple HP combo solutions for min-RMSE per id, arbitrarily take the first HP combo 
   ungroup() %>% 
-  dplyr::select(id, n_lags, alpha, lambda, RMSE, sMAPE, MAE)
+  dplyr::select(id, n_lags, lambda, alpha, RMSE, sMAPE, MAE)
 
 
 # save as apa style table
@@ -508,7 +529,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               # Get optimal HPs per id
               alpha_i <- (opt_hps %>% filter(id == id_i))$alpha
               n_lags_i <- (opt_hps %>% filter(id == id_i))$n_lags
-              lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
+             lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
               
               # create wide format dataset with lagged features
               df_eval_i <- create_lag_features( # own function to create lagged df 
@@ -536,8 +557,10 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               
               set.seed(47)
               
-              glm_fit <- glmnet(X_train, y_train, alpha = alpha_i, standardize = FALSE, trace.it = T, lambda=lambda_i) #data is already z-transformed
+              glm_fit <- glmnet(X_train, y_train, alpha = alpha_i, standardize = FALSE) #type.measure = "mse" , nfolds = 10 ) #data is already z-transformed
+              print(glm_fit)
               
+
               # save number of non zero coefficients and coefficients
               glm_summary <- capture.output(print(glm_fit)) %>% paste(collapse = "\n")
               
@@ -548,7 +571,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               rownames(coef_df) <- NULL
               
               # save predictions
-              preds <- as.vector(predict(glm_fit, newx = X_test)) 
+              preds <- as.vector(predict(glm_fit, newx = X_test, s = lambda_i)) 
               
               # Undo standardization
               mean_ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$mean_eval
@@ -579,7 +602,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               
              
               test_metrics_i <- compute_metrics(preds, y_test) # accuracy metrics per id
-              test_metrics_i <- test_metrics_i %>% mutate(id = id_i, n_lags=n_lags_i, alpha=alpha_i) # add optimized HPO
+              test_metrics_i <- test_metrics_i %>% mutate(id = id_i, n_lags=n_lags_i, alpha=alpha_i, lambda = lambda_i) # add optimized HPO
               test_metrics <- bind_rows(test_metrics, test_metrics_i) # accuracy metrics matrix (all ids)
               #n_coef <- bind_rows(n_coef, n_nonzero_coef_i)
               #coefficients <- bind_rows(coefficients, coefficients_i)
@@ -683,11 +706,6 @@ perm_test
 # see glm_summary --> n_nonzero coefficients, etc
 #TODO: Ask wie detailliert Ergebnisse der Regularisierung berichtet werden, z.B. Anzahl Parameter ≠ 0 bei lasso etc
 
-# Plot a grid of 9 forecasts
-### TODO
-# TODO dafür wieder undo scaling und diff_detrend
-
-
 
 ########################################################################################################################
 ####################################### Bootstrapping for Prediction Intervals #########################################
@@ -715,59 +733,59 @@ n_bootstrap <- 100 # change for final eval
 test_metrics_boot <- tibble() #accuracy metrics
 test_predictions_boot <- tibble() # mean_preds, median_preds, y_test, PI, and PI eval 
 for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missings in validation set --> no HPO possible
-    # Get optimal HPs per id
-    alpha_i <- (opt_hps %>% filter(id == id_i))$alpha
-    n_lags_i <- (opt_hps %>% filter(id == id_i))$n_lags
-    lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
-
-    df_eval_i <- create_lag_features( #create lagged dataset
-      df=df_eval, 
-      id_col=id_col, 
-      time_col=time_col, 
-      target_col=target_item, 
-      n_lags=n_lags_i,
-      numeric_features=features_to_lag
-    )
+  # Get optimal HPs per id
+  alpha_i <- (opt_hps %>% filter(id == id_i))$alpha
+  n_lags_i <- (opt_hps %>% filter(id == id_i))$n_lags
+  lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
+  
+  df_eval_i <- create_lag_features( #create lagged dataset
+    df=df_eval, 
+    id_col=id_col, 
+    time_col=time_col, 
+    target_col=target_item, 
+    n_lags=n_lags_i,
+    numeric_features=features_to_lag
+  )
+  
+  # Split lagged dataset
+  X_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+  y_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(target_item))
+  X_test <- as.matrix(df_eval_i %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+  y_test <- as.matrix(y_test_raw %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(value))
+  
+  # create matrix for bootstrapped preds
+  all_preds <- matrix(NA, nrow = n_bootstrap, ncol = nrow(X_test))
+  # TODO col.names<-(all_preds) counteranzahl ab 1 + n_lags pro id 
+  # row = bootstrap Durchlauf
+  # column = counter zest set 
+  
+  # Bootstrapping
+  for(i in 1:n_bootstrap) {
+    # ziehe  nrow(X_train) viele Zeilen aber mit zurücklegen 
+    sample_idx <- sample(1:nrow(X_train), size = nrow(X_train), replace = TRUE) 
+    X_sample <- X_train[sample_idx, , drop = FALSE] #should have 90 - n_lags rows
+    y_sample <- y_train[sample_idx] #should have 90 - n_lags values
     
-    # Split lagged dataset
-    X_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-    y_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(target_item))
-    X_test <- as.matrix(df_eval_i %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-    y_test <- as.matrix(y_test_raw %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(value))
+    # Fit glm to bootstrap sample
+    glm_fit <- glmnet(X_sample, y_sample, alpha = alpha_i, standardize = FALSE, trace.it = T, lambda=lambda_i) # Already STD
     
-    # create matrix for bootstrapped preds
-    all_preds <- matrix(NA, nrow = n_bootstrap, ncol = nrow(X_test))
-    # TODO col.names<-(all_preds) counteranzahl ab 1 + n_lags pro id 
-    # row = bootstrap Durchlauf
-    # column = counter zest set 
+    # Predict on test set using a set lambda
+    preds <- predict(glm_fit, newx = X_test)
     
-    # Bootstrapping
-    for(i in 1:n_bootstrap) {
-      # ziehe  nrow(X_train) viele Zeilen aber mit zurücklegen 
-      sample_idx <- sample(1:nrow(X_train), size = nrow(X_train), replace = TRUE) 
-      X_sample <- X_train[sample_idx, , drop = FALSE] #should have 90 - n_lags rows
-      y_sample <- y_train[sample_idx] #should have 90 - n_lags values
-      
-      # Fit glm to bootstrap sample
-      glm_fit <- glmnet(X_sample, y_sample, alpha = alpha_i, standardize = FALSE, trace.it = T, lambda=lambda_i) # Already STD
-      
-      # Predict on test set using a set lambda
-      preds <- predict(glm_fit, newx = X_test)
-      
-      # Undo standardization
-      mean___ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$mean_eval
-      sd___ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$sd_eval
-      preds <- preds * sd___ + mean___
-      
-      # Undo detrending/differencing
-      transformation <- trend_parameter_eval %>%
-        filter(id == id_i, item == target_item) %>%
-        pull(transformation)
-      params <- trend_parameter_eval %>%
-        filter(id == id_i, item == target_item) %>%
-        pull(params)
-      preds <- undo_diff_and_detrend_single(preds, test_counters, transformation, params)
-      all_preds[i, ] <- as.vector(preds)
+    # Undo standardization
+    mean___ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$mean_eval
+    sd___ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$sd_eval
+    preds <- preds * sd___ + mean___
+    
+    # Undo detrending/differencing
+    transformation <- trend_parameter_eval %>%
+      filter(id == id_i, item == target_item) %>%
+      pull(transformation)
+    params <- trend_parameter_eval %>%
+      filter(id == id_i, item == target_item) %>%
+      pull(params)
+    preds <- undo_diff_and_detrend_single(preds, test_counters, transformation, params)
+    all_preds[i, ] <- as.vector(preds)
   }
   
   #??apply # 2 indicates columns
@@ -798,14 +816,114 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
 }
 
 
-# Plot individual plots for 5 unique IDs
-for (example_id in unique(test_metrics_boot$id)[6:10]) {
+########################################################################################################################
+####################################### RESIDUAL Bootstrapping for Prediction Intervals #########################################
+########################################################################################################################
+# Fit glm and predict target item per id
+test_metrics_resid_boot <- tibble() #accuracy metrics
+test_predictions__resid_boot <- tibble() # mean_preds, median_preds, y_test, PI, and PI eval 
+for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missings in validation set --> no HPO possible
+    # Get optimal HPs per id
+    alpha_i <- (opt_hps %>% filter(id == id_i))$alpha
+    n_lags_i <- (opt_hps %>% filter(id == id_i))$n_lags
+    lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
+
+    df_eval_i <- create_lag_features( #create lagged dataset
+      df=df_eval, 
+      id_col=id_col, 
+      time_col=time_col, 
+      target_col=target_item, 
+      n_lags=n_lags_i,
+      numeric_features=features_to_lag
+    )
+    
+    # Split lagged dataset
+    X_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+    y_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(target_item))
+    X_test <- as.matrix(df_eval_i %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+    y_test <- as.matrix(y_test_raw %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(value))
+    
+
+
+      # Predict on test set 
+      B <- 500 
+      
+      boot <- resid_bootstrap(
+        X_train = X_train,
+        y_train = y_train,
+        X_test  = X_test,
+        alpha   = alpha_i,
+        lambda  = lambda_i,
+        B       = B,
+        seed    = 47,
+        standardize = FALSE
+      )
+      
+      # Bootstrap-Verteilung 
+      mu_boot <- boot$mu_boot         # n_test x B
+      mu_point <- boot$mu_point       # n_test
+      
+      pred_lower <- apply(mu_boot, 1, quantile, probs = 0.025, na.rm = TRUE)
+      pred_upper <- apply(mu_boot, 1, quantile, probs = 0.975, na.rm = TRUE)
+      
+      # bootstrap mean as point forecast (or median?)
+      mu_mean <- rowMeans(mu_boot, na.rm = TRUE)
+      
+      
+      # Undo standardization
+      mean_ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$mean_eval
+      sd_   <- (std_stats_eval %>% filter(id == id_i, item == target_item))$sd_eval
+      
+      mu_mean  <- mu_mean  * sd_ + mean_
+      pred_lower <- pred_lower * sd_ + mean_
+      pred_upper <- pred_upper * sd_ + mean_
+      
+      # Undo detrending/differencing
+      transformation <- trend_parameter_eval %>%
+        filter(id == id_i, item == target_item) %>%
+        pull(transformation)
+      
+      params <- trend_parameter_eval %>%
+        filter(id == id_i, item == target_item) %>%
+        pull(params)
+      
+      mu_mean  <- undo_diff_and_detrend_single(mu_mean,  test_counters, transformation, params)
+      pred_lower <- undo_diff_and_detrend_single(pred_lower, test_counters, transformation, params)
+      pred_upper <- undo_diff_and_detrend_single(pred_upper, test_counters, transformation, params)
+      
   
-  y_test <- (test_predictions_boot %>% filter(id == example_id))$y_test
-  y_pred_mean <- (test_predictions_boot %>% filter(id == example_id))$mean_preds
-  y_pred_median <- (test_predictions_boot %>% filter(id == example_id))$median_preds
-  lower <- (test_predictions_boot %>% filter(id == example_id))$pred_lower
-  upper <- (test_predictions_boot %>% filter(id == example_id))$pred_upper
+    #store preds and PIs for plotting
+   test_predictions_resid_boot_i <- tibble(
+      id = id_i,
+      counter = test_counters,
+      y_test = as.numeric(y_test),
+      mean_preds = as.numeric(mu_mean),
+      pred_lower = as.numeric(pred_lower),
+      pred_upper = as.numeric(pred_upper)
+    )
+    
+    
+   test_predictions_resid_boot <- bind_rows(test_predictions_resid_boot, test_predictions_resid_boot_i)
+   
+    
+  
+  # Compute metrics
+  test_metrics_i <- compute_metrics(y_test, mu_mean, pred_lower, pred_upper)
+  test_metrics_i <- test_metrics_i %>% mutate(id = id_i, n_lags=n_lags_i, alpha=alpha_i, lambda = lambda_i)
+  test_metrics_resid_boot <- bind_rows(test_metrics_resid_boot, test_metrics_i)
+  
+  
+}
+
+
+# Plot individual plots for 5 unique IDs
+for (example_id in unique(test_metrics_boot$id)[5:8]) {
+  
+  y_test <- (test_predictions_resid_boot %>% filter(id == example_id))$y_test
+  y_pred_mean <- (test_predictions_resid_boot %>% filter(id == example_id))$mean_preds
+  y_pred_median <- (test_predictions_resid_boot %>% filter(id == example_id))$median_preds
+  lower <- (test_predictions_resid_boot %>% filter(id == example_id))$pred_lower
+  upper <- (test_predictions_resid_boot %>% filter(id == example_id))$pred_upper
   
   
   # Prepare a tidy dataframe and convert to long format for plotting
@@ -813,7 +931,7 @@ for (example_id in unique(test_metrics_boot$id)[6:10]) {
     time = 1:length(y_test),
     true = y_test,
     mean_forecast = y_pred_mean,
-    median_forecast = y_pred_median,
+   # median_forecast = y_pred_median,
     lower = lower,
     upper = upper
   )
@@ -823,7 +941,7 @@ for (example_id in unique(test_metrics_boot$id)[6:10]) {
   print(ggplot(boot_plot_df, aes(x = time)) +
     geom_ribbon(aes(ymin = lower, ymax = upper), fill = "red", alpha = 0.2) +
     geom_line(aes(y = mean_forecast, color = "Mean forecast"), linewidth = 1) +
-    geom_line(aes(y = median_forecast, color = "Median forecast"), linewidth = 1) +
+   # geom_line(aes(y = median_forecast, color = "Median forecast"), linewidth = 1) +
     geom_point(aes(y = true, color = "True values"), shape = 16) +
     geom_line(aes(y = true, color = "True values"), linetype = "dashed") +
     scale_color_manual(values = c("Mean forecast" = "red",
@@ -842,7 +960,7 @@ for (example_id in unique(test_metrics_boot$id)[6:10]) {
 
 # plot observed vs predicted
 
-ggplot(test_predictions_boot, aes(x = y_test[,1], y = median_preds)) +
+ggplot(test_predictions_resid_boot, aes(x = y_test, y = mean_preds)) +
   geom_point(alpha = 0.5) +
   geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
   facet_wrap(~ id, scales = "free") +
@@ -854,14 +972,14 @@ ggplot(test_predictions_boot, aes(x = y_test[,1], y = median_preds)) +
   theme_minimal()
 
 
-test_predictions_boot <- test_predictions_boot %>%
-  mutate(resid = y_test[,1] - median_preds)
+test_predictions_resid_boot <- test_predictions_resid_boot %>%
+  mutate(resid = y_test - mean_preds)
 
-ggplot(test_predictions_boot, aes(x = y_test[,1], y = resid)) +
+ggplot(test_predictions_resid_boot, aes(x = mean_preds, y = resid)) +
   geom_point(alpha = 0.4) +
   geom_hline(yintercept = 0, linetype = "dashed") +
   labs(
-    x = "Observed",
+    x = "Predicted",
     y = "Residual (Observed – Predicted)",
     title = "Residual plot"
   ) +
@@ -870,7 +988,7 @@ ggplot(test_predictions_boot, aes(x = y_test[,1], y = resid)) +
 
 
 
-ggplot(test_predictions_boot, aes(x = y_test[,1], y = resid)) +
+ggplot(test_predictions_resid_boot, aes(x = mean_preds, y = resid)) +
   
   # Punktwolke
   geom_point(aes(color = abs(resid)),
@@ -886,7 +1004,7 @@ ggplot(test_predictions_boot, aes(x = y_test[,1], y = resid)) +
                        name = "|Residual|") +
   
   labs(
-    x = "Observed value",
+    x = "Predicted",
     y = "Residual (Observed – Predicted)",
     title = "Residual Plot",
     subtitle = "systematic over- and underestimation"
@@ -904,17 +1022,17 @@ ggplot(test_predictions_boot, aes(x = y_test[,1], y = resid)) +
 
 
 
-########### plot RLR-BS with historical data#######
+########### plot RLR-RESID-BS with historical data#######
 # Plot individual plots for 5 unique IDs
-for (example_id in unique(test_metrics_boot$id)[6:10]) {
+for (example_id in unique(test_metrics_boot$id)[9:12]) {
   #TODO: historical data mit plotten
   # Extract training + test predictions for this ID
   y_train <- (raw_data_long_imp2 %>% filter(id == example_id, counter %in% train_val_counters, item == "positive_physical_health_behavior"))$value
-  y_test  <- (test_predictions_boot %>% filter(id == example_id))$y_test
-  y_pred_mean   <- (test_predictions_boot %>% filter(id == example_id))$mean_preds
-  y_pred_median <- (test_predictions_boot %>% filter(id == example_id))$median_preds
-  lower <- (test_predictions_boot %>% filter(id == example_id))$pred_lower
-  upper <- (test_predictions_boot %>% filter(id == example_id))$pred_upper
+  y_test  <- (test_predictions_resid_boot %>% filter(id == example_id))$y_test
+  y_pred_mean   <- (test_predictions_resid_boot %>% filter(id == example_id))$mean_preds
+ # y_pred_median <- (test_predictions_resid_boot %>% filter(id == example_id))$median_preds
+  lower <- (test_predictions_resid_boot %>% filter(id == example_id))$pred_lower
+  upper <- (test_predictions_resid_boot %>% filter(id == example_id))$pred_upper
   
   n_train <- length(y_train)
   n_test  <- length(y_test)
@@ -931,7 +1049,7 @@ for (example_id in unique(test_metrics_boot$id)[6:10]) {
     time = (n_train + 1):(n_train + n_test),
     true = y_test,
     mean_forecast = y_pred_mean,
-    median_forecast = y_pred_median,
+   # median_forecast = y_pred_median,
     lower = lower,
     upper = upper,
     type = "Test"
@@ -940,65 +1058,68 @@ for (example_id in unique(test_metrics_boot$id)[6:10]) {
   # Merge for plotting
   boot_plot_df <- df_test
   
-  # Plot
   print(
     ggplot() +
-      # Prediction interval
-      geom_ribbon(data = boot_plot_df,
-                  aes(x = time, ymin = lower, ymax = upper),
-                  fill = "red", alpha = 0.2) +
-      
-      # Forecast lines
-      geom_line(data = boot_plot_df,
-                aes(x = time, y = mean_forecast, color = "Mean forecast"),
-                linewidth = 1) +
-      geom_line(data = boot_plot_df,
-                aes(x = time, y = median_forecast, color = "Median forecast"),
-                linewidth = 1) +
-      
-      # Observed values
-      geom_point(data = boot_plot_df,
-                 aes(x = time, y = true, color = "Observed values"),
-                 shape = 16) +
-      geom_line(data = boot_plot_df,
-                aes(x = time, y = true, color = "Observed values"),
-                linetype = "dashed") +
-      
-      # Historical data (y_train)
-      geom_line(data = df_hist,
-                aes(x = time, y = true, color = "Historical data"),
-                linewidth = 1) +
-      
+      geom_ribbon(
+        data = boot_plot_df,
+        aes(x = time, ymin = lower, ymax = upper, fill = "95% Prediction Interval"),
+        alpha = 0.2
+      ) +
+      geom_line(
+        data = boot_plot_df,
+        aes(x = time, y = mean_forecast, color = "Mean forecast"),
+        linewidth = 1
+      ) +
+     # geom_line(
+      #  data = boot_plot_df,
+      #  aes(x = time, y = median_forecast, color = "Median forecast"),
+      #  linewidth = 1
+     # ) +
+      geom_point(
+        data = boot_plot_df,
+        aes(x = time, y = true, color = "Observed values"),
+        shape = 16
+      ) +
+      geom_line(
+        data = boot_plot_df,
+        aes(x = time, y = true, color = "Observed values"),
+        linetype = "dashed"
+      ) +
+      geom_line(
+        data = df_hist,
+        aes(x = time, y = true, color = "Historical data"),
+        linewidth = 1
+      ) +
       scale_color_manual(values = c(
         "Mean forecast" = "red",
-        "Median forecast" = "blue",
+       # "Median forecast" = "blue",
         "Observed values" = "black",
         "Historical data" = "grey40"
       )) +
-      
       scale_fill_manual(values = c(
         "95% Prediction Interval" = "red"
       )) +
-      
-      labs(title = paste0("Regularized linear Regression with bootstrapped PI — ID ", example_id),
-           x = "Time step",
-           y = "Target value",
-           color = "") +
+      labs(
+        title = paste0("Regularized linear Regression with bootstrapped PI — ID ", example_id),
+        x = "Time step",
+        y = "Target value",
+        color = "",
+        fill  = ""
+      ) +
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
   )
+  
 }
-
-
 
 mean(test_metrics_boot$RMSE)
 #21.63
-median(test_metrics_boot$RMSE)
+#median(test_metrics_boot$RMSE)
 #20.25
 range(test_metrics_boot$RMSE)
 # 5.801475 48.536406
 range(test_metrics_boot$Coverage)
-#-----------------------Coverage#--------------------------------------------------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------------------------------------------------------------------------
 #--------------Random forest regression------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------------------------------------
 #HPO per participant
@@ -1322,59 +1443,67 @@ for (example_id in unique(test_metrics_RFR$id)[6:10]) {
   # Merge for plotting
   boot_plot_df <- df_test
   
+  
   # Plot
   print(
     ggplot() +
-      # 95% Prediction Interval
       geom_ribbon(
         data = boot_plot_df,
         aes(x = time, ymin = lower, ymax = upper, fill = "95% Prediction Interval"),
         alpha = 0.2
       ) +
-      # Forecast 
-      geom_line(data = boot_plot_df,
-                aes(x = time, y = median_forecast, color = "Median forecast"),
-                linewidth = 1) +
-      
-      # Observed values
-      geom_point(data = boot_plot_df,
-                 aes(x = time, y = true, color = "Observed values"),
-                 shape = 16) +
-      geom_line(data = boot_plot_df,
-                aes(x = time, y = true, color = "Observed values"),
-                linetype = "dashed") +
-      
-      # Historical data (y_train)
-      geom_line(data = df_hist,
-                aes(x = time, y = true, color = "Historical data"),
-                linewidth = 1) +
-      
+      geom_line(
+        data = boot_plot_df,
+        aes(x = time, y = mean_forecast, color = "Mean forecast"),
+        linewidth = 1
+      ) +
+      geom_line(
+        data = boot_plot_df,
+        aes(x = time, y = median_forecast, color = "Median forecast"),
+        linewidth = 1
+      ) +
+      geom_point(
+        data = boot_plot_df,
+        aes(x = time, y = true, color = "Observed values"),
+        shape = 16
+      ) +
+      geom_line(
+        data = boot_plot_df,
+        aes(x = time, y = true, color = "Observed values"),
+        linetype = "dashed"
+      ) +
+      geom_line(
+        data = df_hist,
+        aes(x = time, y = true, color = "Historical data"),
+        linewidth = 1
+      ) +
       scale_color_manual(values = c(
+        "Mean forecast" = "red",
         "Median forecast" = "blue",
         "Observed values" = "black",
         "Historical data" = "grey40"
       )) +
-      
       scale_fill_manual(values = c(
         "95% Prediction Interval" = "red"
       )) +
-      
-      labs(title = paste0("Random Forest Regression — ID ", example_id),
-           x = "Time step",
-           y = "Target value",
-           color = "") +
+      labs(
+        title = paste0("Regularized linear Regression with bootstrapped PI — ID ", example_id),
+        x = "Time step",
+        y = "Target value",
+        color = "",
+        fill  = ""
+      ) +
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
   )
-}
-
-
+  
+}  
 ### residual plot rlr bs
 #----------------------------------------------------------------------------------------
-test_predictions_boot <- test_predictions_boot %>%
+test_predictions_resid_boot <- test_predictions_resid_boot %>%
   mutate(resid = y_test[,1] - median_preds)
 
-ggplot(test_predictions_boot, aes(x = median_preds, y = resid)) +
+ggplot(test_predictions_resid_boot, aes(x = median_preds, y = resid)) +
   geom_point(alpha = 0.4) +
   geom_hline(yintercept = 0, linetype = "dashed") +
   labs(
@@ -1387,7 +1516,7 @@ ggplot(test_predictions_boot, aes(x = median_preds, y = resid)) +
 
 
 
-ggplot(test_predictions_boot, aes(x = median_preds, y = resid)) +
+ggplot(test_predictions_resid_boot, aes(x = median_preds, y = resid)) +
   
 # Punktwolke
 geom_point(aes(color = abs(resid)),
