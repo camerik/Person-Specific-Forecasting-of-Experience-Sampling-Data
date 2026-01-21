@@ -558,5 +558,59 @@ compute_metrics <- function(y_obs, y_pred,
   ))
 }
 
-??sMAPE
+# bootstrap via residuals for glmnet
+
+resid_bootstrap <- function(
+    X_train, y_train, X_test,
+    alpha, lambda,
+    B = 500,
+    seed = 47,
+    standardize = FALSE
+) {
+  stopifnot(is.matrix(X_train), is.matrix(X_test))
+  y_train_vec <- as.numeric(y_train)
+  
+  set.seed(seed)
+  
+  #Fit with fixed lambda
+  fit0 <- glmnet(
+    x = X_train,
+    y = y_train_vec,
+    alpha = alpha,
+    lambda = lambda,         
+    standardize = standardize
+  )
+  
+  # compute residual for each forecast step 
+  yhat_train <- as.vector(predict(fit0, newx = X_train, s = lambda))
+  e <- y_train_vec - yhat_train
+  
+  # Bootstrap refit predictions
+  n_test <- nrow(X_test)
+  mu_boot <- matrix(NA_real_, nrow = n_test, ncol = B)
+  
+  for (b in seq_len(B)) {
+    # residual bootstrap
+    e_star <- sample(e, size = length(e), replace = TRUE)
+    y_star <- yhat_train + e_star
+    
+    fit_b <- glmnet(
+      x = X_train,
+      y = y_star,
+      alpha = alpha,
+      lambda = lambda,       
+      standardize = standardize
+    )
+    
+    mu_boot[, b] <- as.vector(predict(fit_b, newx = X_test, s = lambda))
+  }
+  
+  # Return bootstrap distribution + summary
+  list(
+    fit0 = fit0,
+    mu_point = as.vector(predict(fit0, newx = X_test, s = lambda)),
+    mu_boot = mu_boot
+  )
+}
+
 
