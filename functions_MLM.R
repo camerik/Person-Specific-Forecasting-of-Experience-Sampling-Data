@@ -408,7 +408,30 @@ undo_diff_and_detrend_single <- function(values, counters, transformation, param
   values <- values[ord]
   counters <- counters[ord]
   
-  # Apply inverse transformation based on type
+  # new
+  
+  
+  # apply inverse transformation based on trend type
+  if (transformation == "difference") {
+    restored <-  stats::diffinv(x=value, xi=params[[1]])[-1] # delete first value
+  } else if (transformation %in% c("detrend_linear", "detrend_quadratic")) {
+    model <- params[[1]][[1]]
+    restored <- values + predict(model, newdata = tibble(counter = counters))
+  } else {
+    # "none" or unknown
+    restored <- values
+  }
+  return(restored)
+}
+
+
+undo_diff_and_detrend_matrix <- function(values, counters, transformation, params) {
+  # Ensure correct order by counter
+  ord <- order(counters)
+  values <- values[ord, ] # As values is a matrix in this case, we need to select all rows and ensure order within rows
+  counters <- counters[ord]
+  
+  # apply inverse transformation based on trend type
   if (transformation == "difference") {
     restored <-  stats::diffinv(x=value, xi=params[[1]])[-1] # delete first value
   } else if (transformation %in% c("detrend_linear", "detrend_quadratic")) {
@@ -457,7 +480,7 @@ undo_diff_and_detrend_single <- function(values, counters, transformation, param
 
 
 
-create_lag_features <- function(df, id_col, time_col, target_col, num_lags = 5, numeric_features = NULL) {
+create_lag_features <- function(df, id_col, time_col, target_col, n_lags = 5, numeric_features = NULL) {
   # ensure order
   df <- df %>% arrange(!!sym(id_col), !!!syms(time_col))
   
@@ -471,7 +494,7 @@ create_lag_features <- function(df, id_col, time_col, target_col, num_lags = 5, 
   df_lagged <- df %>% select(all_of(c(id_col, time_col, target_col))) #nimm depression zu zeitpunkt counter
   
   # Loop over lags (no inner arrange)
-  for (lag in seq_len(num_lags)) {
+  for (lag in seq_len(n_lags)) {
     lagged_df <- df %>%
       group_by(!!rlang::sym(id_col)) %>%
       mutate(across(all_of(numeric_features), #packe die anderen features UND target item nur als lags in diese zeile

@@ -18,8 +18,8 @@
   
 
 ############################################### Initialization ##########################################################
-
 # Initialize renv, load functions and set seed for reproducability
+# renv::init()
 packages <- c("dplyr", "tidyr", "zoo", "purrr", "Metrics", "ggplot2", "glmnet", "coin",
               "openesm", "quantregForest", "kableExtra")
 lapply(packages, function(x) {
@@ -28,7 +28,15 @@ lapply(packages, function(x) {
   }
   library(x, character.only = TRUE)
 })
-source("functions_MLM.R")
+source("git-ordner/Uncertainty-Quantification-in-ESM-Time-Series-Forecast/functions_MLM.R")
+
+# renv::clean()
+# renv::project()
+# renv::snapshot(force = T)
+# renv::dependencies()
+renv::status()
+# readLines(".renvignore")
+
 
 .libPaths()
 
@@ -44,7 +52,6 @@ load("raw_data.RData")
 n_id_1 = length(unique(raw_data$id))
 
 ############################################# Preprocessing #############################################################
-
 # Drop columns not required for forecasting
 cols_to_drop <- c("scheduled_time", "response_time",
                   "location_latitude", "location_longitude", "start_date", 
@@ -406,7 +413,7 @@ target_item <- "positive_physical_health_behavior"
 
 y_test_raw <- raw_data_long_imp %>% filter(item == target_item, counter %in% c(val_counters, test_counters))
 # Lambda-Grid-Search
-#lambda_grid <- 10^seq(1, -4, length.out = 50)  
+# lambda_seq<- 10^seq(1, -4, length.out = 50)  
 
 val_metrics <- tibble() # tibble for accuracy metrics per HPO combination
 i_iter = 0
@@ -421,9 +428,6 @@ for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
   )
   
   for (alpha_i in seq(0, 1, 0.5)) { # Optimize regularization ( 0 = ridge, 1 = lasso, 0 < alpha < 1 = elastic net)
-    #for (lambda_i in seq_along(lambda_grid)) {
-      
-      #lambda <- lambda_grid[lambda_i]
       # Fit glm and predict targets per id
       for (id_i in unique(df_hpo_i$id)) {
         # CAVE: wird unten überschrieben mit train_val
@@ -431,30 +435,32 @@ for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
         y_train <- as.matrix(df_hpo_i %>% filter(counter %in% train_counters, id == id_i) %>% dplyr::select(target_item, -id))
         # CAVE: test dataset means val dataset in HPO
         X_test <- as.matrix(df_hpo_i %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-        y_test <- as.matrix(y_test_raw %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(value))
+        y_test <- as.vector(as.matrix(y_test_raw %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(value)))
         
         set.seed(47)
         
         # lambda opt
-        glm_fit <- cv.glmnet(
+        glm_fit <- glmnet(
           X_train, y_train,
           alpha = alpha_i,
           standardize = FALSE,
-          type.measure = "mse", 
-          nfolds = 10 
-          #lambda = lambda_i
+          #lambda = lambda_seq
         )
         print(glm_fit)
         
         
-        preds_hpo <- as.vector(predict(glm_fit, newx = X_test, s = "lambda.min")) # do NOT use cv.glmnet --> does not take into account that preds are time series
+        preds_hpo <- predict(glm_fit, newx = X_test) # Shape ( one row = all lambdas for one time point, one column = one time series (lambda-specific))
+        
+        # do NOT use cv.glmnet --> does not take into account that preds are time series
         # • “lambda.min”: the λ at which the smallest MSE is achieved. (with CV)
         # • “lambda.1se”: the largest λ at which the MSE is within one standard error of the smallest MSE (default).
+        
         
         # Undo standardization
         mean_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$mean_hpo
         sd_ <- (std_stats_hpo %>% filter(id == id_i, item == target_item))$sd_hpo
         preds_hpo <- preds_hpo * sd_ + mean_
+        
         
         # Undo detrending/differencing
         transformation_hpo <- trend_parameter_hpo %>%
@@ -463,14 +469,20 @@ for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
         params_hpo <- trend_parameter_hpo %>%
           filter(id == id_i, item == target_item) %>%
           pull(params)
-        preds_hpo <- undo_diff_and_detrend_single(preds_hpo, val_counters, transformation_hpo, params_hpo)
+        preds_hpo <- undo_diff_and_detrend_matrix(preds_hpo, val_counters, transformation_hpo, params_hpo)
+        
+        # Find best lambda depending on min rmse
+        rmse_preds_hpo = sqrt(colMeans((y_test - preds_hpo)^2))
+        best_lambda_index = which.min(rmse_preds_hpo)
+        best_lambda_i = glm_fit$lambda[best_lambda_index]
+        preds_hpo_i = as.vector(preds_hpo[,best_lambda_index])
         
         # compute accuracy metrics
         val_metrics_i <- compute_metrics(preds_hpo, y_test) # TODO: außerhalb der schleife überprüfen ob code richtig läuft
         val_metrics_i <- val_metrics_i %>% mutate(id = id_i, 
                                                   n_lags=n_lags_i,
                                                   alpha=alpha_i,
-                                                 lambda = glm_fit$lambda.min)
+                                                 lambda = best_lambda_i)
         
         val_metrics <- bind_rows(val_metrics, val_metrics_i)
       }
@@ -480,7 +492,6 @@ for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
 
 length(unique(df_hpo_i$id))
 
-glm_fit$lambda.min
 
 
 # Save hps per id which maximize accuracy
@@ -494,15 +505,15 @@ opt_hps <- val_metrics %>%
 
 
 # save as apa style table
-# Format numeric columns APA-style
-# opt_hps_apa <- opt_hps %>%
-#   mutate(
-#     RMSE  = round(RMSE, 3),
-#     sMAPE = round(sMAPE, 3),
-#     MAE   = round(MAE, 3),
-#     #lambda = format(lambda, scientific = TRUE, digits = 3)
-#     lambda = formatC(lambda, format = "f", digits = 2)
-#   )
+ #Format numeric columns APA-style
+ opt_hps_apa <- opt_hps %>%
+   mutate(
+     RMSE  = round(RMSE, 3),
+     sMAPE = round(sMAPE, 3),
+     MAE   = round(MAE, 3),
+     # lambda = format(lambda, scientific = TRUE, digits = 3)
+    lambda = formatC(lambda, format = "f", digits = 2)
+  )
 
 #apa_tab <- xtable(
 #  opt_hps_apa,
@@ -557,7 +568,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               
               set.seed(47)
               
-              glm_fit <- glmnet(X_train, y_train, alpha = alpha_i, standardize = FALSE) #type.measure = "mse" , nfolds = 10 ) #data is already z-transformed
+              glm_fit <- glmnet(X_train, y_train, alpha = alpha_i, lambda = lambda_i, standardize = FALSE) #data is already z-transformed
               print(glm_fit)
               
 
@@ -726,7 +737,7 @@ perm_test
 # 
 
 
-n_bootstrap <- 100 # change for final eval 
+n_bootstrap <- 500 
 
 
 # Fit glm and predict target item per id
