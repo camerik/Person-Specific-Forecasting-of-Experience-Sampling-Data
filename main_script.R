@@ -58,7 +58,7 @@ cols_to_drop <- c("scheduled_time", "response_time",
                   "end_date", "duration_in_seconds", "finished", "sleep_duration") 
 raw_data <- raw_data %>% select(-all_of(cols_to_drop))
 
-# Transform weekday to numbers and fill NAs
+# Transform weekday to numerical variable and impute NAs
 weekday_map <- c("Monday"=0,"Tuesday"=1,"Wednesday"=2,"Thursday"=3,"Friday"=4,"Saturday"=5,"Sunday"=6)
 raw_data$weekday <- weekday_map[raw_data$weekday]
 for (i in 2:(nrow(raw_data))) {
@@ -94,50 +94,6 @@ beep_feature_names = setdiff(colnames(raw_data), c("id", "counter", "weekday", "
 daily_feature_names = c("weekday", "sleep_quality")
 features_to_lag = setdiff(colnames(raw_data), c("id", "counter", "weekday", "day", "beep", "sleep_quality"))
 features_to_lag
-
-# range answer categories (all items have the same possible answer categories 0-100)
-range_answer_cat =  raw_data %>%
-  dplyr::select(all_of(feature_names)) %>%
-  unlist() %>%
-  range(na.rm = TRUE)
-
-# Calculate in-person statistics and plot counts of answers per item over all ids (Westhoff et al., 2024)
-data_statistics = raw_data %>%
-  dplyr::group_by(id) %>%
-  dplyr::summarize(across(all_of(feature_names),
-                          list(
-                            mean = ~ mean(.x, na.rm = T),
-                                sd = ~ sd(.x, na.rm = T)
-                            ),
-                          .names = "{.col}_{.fn}")) %>%
-  ungroup()
-
-# plot 4 example features
-raw_data %>%
-  dplyr::select(all_of(feature_names[13:16])) %>%
-  tidyr::pivot_longer(cols = everything()) %>%
-  ggplot(aes(x = value)) +
-  geom_histogram(bins=20, na.rm=TRUE) +
-  facet_grid(~ name) +
-  theme_classic()
-
-#TODO: in MA beschreiben wieso ich nur ein target item verwendet habe
-
-
-#TODO: log transformation for skewed data
-raw_data %>%
-  dplyr::select(all_of(feature_names)) %>%
-  dplyr::mutate(across(
-    everything(),
-    log1p
-  )) %>%
-  tidyr::pivot_longer(cols = everything()) %>%
-  ggplot(aes(x = value)) +
-  geom_histogram(bins = 20, na.rm = TRUE) +
-  facet_wrap(~ name, scales = "free_x") +
-  theme_classic() +
-  labs(x = "log(1 + x)", y = "Count")
-
 
 # Check for and exclude ids with low variance: 
 # Cutoff: variance < 1 or ≥ 10 unique answer categories
@@ -283,7 +239,7 @@ train_val_counters <- union(train_counters, val_counters)
 test_counters <- seq(n_train + n_val + 1, n_obs, 1)
 
 
-# Remove people with NAs in test data
+# Remove IDs with NAs in test data (important for model evaluation) 
 ids_with_nas <- raw_data_long %>%
   filter(counter %in% test_counters) %>%
   group_by(id) %>% # over all items!
@@ -299,24 +255,7 @@ n_id_5 = length(unique(raw_data_long$id))
 # n_id_5=37
 
 
-# TODO: Interpolate with different strategy? Check for strategy which takes seasonality into account or 
-# search for papers which investigated impact of imputation strategy on forecast accuracy and uncertainty
-interpolation_type = "spline"
-
-# Source for AR(1)-DF-Test and Stationarity Transformations:
-# Ryan et al. (2025) (adf_flow in diagnose_trend_type)
-
-
-
-
-#################################### Prepare Data for HPO ######################################
-# Interpolate
-raw_data_long_imp <- interpolate(raw_data_long, train_counters, interpolation_type)
-
-# Check if there are any NAs left
-sum(is.na(raw_data_long_imp %>% filter(counter %in% train_counters)))
-
-# Diagnose IDs with missings in val data
+# Check for IDs with missings in val data (important for HPO)
 ids_with_nas_val <- raw_data_long_imp %>%
   filter(counter %in% val_counters) %>%
   group_by(id) %>% 
@@ -327,7 +266,75 @@ ids_with_nas_val <- raw_data_long_imp %>%
 # Remove IDs with missings in val data
 raw_data_long_imp <- raw_data_long_imp %>%
   filter (!( id %in% ids_with_nas_val))
-length(unique(raw_data_long_imp$id))
+n_id_6 = length(unique(raw_data_long_imp$id))
+
+
+# ---------------------Descriptive statistics---------------------------------------------------------------
+# Calculate in-person statistics and plot counts of answers per item over all ids (Westhoff et al., 2024)
+data_statistics = raw_data_long_imp %>%
+  dplyr::group_by(id) %>%
+  dplyr::summarize(across(all_of(feature_names),
+                          list(
+                            mean = ~ mean(.x, na.rm = T),
+                            sd = ~ sd(.x, na.rm = T)
+                          ),
+                          .names = "{.col}_{.fn}")) %>%
+  ungroup()
+
+# plot 4 example features
+raw_data_long_imp %>%
+  dplyr::select(all_of(feature_names[13:16])) %>%
+  tidyr::pivot_longer(cols = everything()) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins=20, na.rm=TRUE) +
+  facet_grid(~ name) +
+  theme_classic()
+
+# plot person specific counts for example id
+example_id <- 68177
+
+raw_data_long_imp %>%
+  dplyr::filter(id == example_id) %>%
+  dplyr::select(all_of(feature_names[2])) %>%
+  ggplot(aes(x = .data[[feature_names[2]]])) +
+  geom_histogram(bins = 20, na.rm = TRUE) +
+  theme_classic()
+
+
+ACF_plot <- function(data, target_item, max_lag = 10) {
+  data %>%
+    dplyr::filter(item == target_item) %>%
+    dplyr::arrange(id, counter) %>%
+    tsibble::as_tsibble(key = id, index = counter) %>%
+    feasts::ACF(value, lag_max = max_lag) %>%
+    fabletools::autoplot() +
+    ggplot2::facet_wrap(~ id)
+}
+
+
+
+ACF_plot(raw_data_long_imp, target_item = "positive_physical_health_behavior")
+
+
+# range of answer categories (all items have the same possible answer categories 0-100)
+range_answer_cat =  raw_data %>%
+  dplyr::select(all_of(feature_names)) %>%
+  unlist() %>%
+  range(na.rm = TRUE)
+#---------------------------------------------------------------------------------------------------
+
+#################################### Prepare Data for HPO ######################################
+# Interpolate
+# TODO: Interpolate with different strategy? Check for strategy which takes seasonality into account or 
+# search for papers which investigated impact of imputation strategy on forecast accuracy and uncertainty
+interpolation_type = "spline"
+
+# Source for AR(1)-DF-Test and Stationarity Transformations:
+# Ryan et al. (2025) (adf_flow in diagnose_trend_type)
+raw_data_long_imp <- interpolate(raw_data_long, train_counters, interpolation_type)
+
+# Check if there are any NAs left
+sum(is.na(raw_data_long_imp %>% filter(counter %in% train_counters)))
 
 # Compute detrending components to detrend data
 trend_parameter_hpo <- diagnose_trend_type(raw_data_long_imp %>% filter(counter %in% train_counters))
@@ -653,6 +660,49 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
 }
 
 
+# ------------Analysis of residuals of elastic net regression-------------------------------------------------
+# compute mean of residuals per participant 
+all_predictions <- all_predictions %>% 
+  mutate(resid = y_true - y_pred)
+
+all_predictions %>%
+  group_by(id) %>%
+  summarise(mean_resid = mean(resid))
+
+# compute aggregated mean 
+all_predictions %>%
+  summarise(mean_resid = mean(resid))
+
+# compute ACF of person-specific residuals 
+max_lag <- 3
+
+acf_per_id <- all_predictions %>%
+  arrange(id, counter) %>%
+  group_by(id) %>%
+  summarise(
+    n = n(),
+    acf = list(stats::acf(resid, plot = FALSE, lag.max = min(max_lag, n - 1))$acf[-1]),
+    # [-1] entfernt Lag 0 (immer 1)
+    acf_lag1 = ifelse(length(acf[[1]]) >= 1, acf[[1]][1], NA_real_),
+    acf_lag2 = ifelse(length(acf[[1]]) >= 2, acf[[1]][2], NA_real_),
+    acf_lag3 = ifelse(length(acf[[1]]) >= 3, acf[[1]][3], NA_real_),
+    .groups = "drop"
+  )
+
+acf_per_id
+# Visualize 
+all_predictions %>%
+  arrange(id, counter) %>%
+  ggplot(aes(x = counter, y = resid)) +
+  geom_hline(yintercept = 0) +
+  geom_line() +
+  facet_wrap(~ id, scales = "free_x") +
+  labs(x = "Counter", y = "Residual")
+
+
+
+#--------------------------------------------------------------------------------------------
+# Sensitivity Analysis
 sensitivity_results <- sensitivity_results %>%
              mutate(zone = factor(zone,
              levels = c("leakage_zone", "clean_zone"),
@@ -827,12 +877,209 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
 }
 
 
+
+# Plot individual plots for 5 unique IDs
+for (example_id in unique(test_metrics_boot$id)[5:8]) {
+  
+  y_test <- (test_predictions_boot %>% filter(id == example_id))$y_test
+  y_pred_mean <- (test_predictions_boot %>% filter(id == example_id))$mean_preds
+  y_pred_median <- (test_predictions_boot %>% filter(id == example_id))$median_preds
+  lower <- (test_predictions_boot %>% filter(id == example_id))$pred_lower
+  upper <- (test_predictions_boot %>% filter(id == example_id))$pred_upper
+  
+  
+  # Prepare a tidy dataframe and convert to long format for plotting
+  boot_plot_df <- data.frame(
+    time = 1:length(y_test),
+    true = y_test,
+    mean_forecast = y_pred_mean,
+    # median_forecast = y_pred_median,
+    lower = lower,
+    upper = upper
+  )
+  
+  
+  # Plot Forecast with uncertainty intervals
+  print(ggplot(boot_plot_df, aes(x = time)) +
+          geom_ribbon(aes(ymin = lower, ymax = upper), fill = "red", alpha = 0.2) +
+          geom_line(aes(y = mean_forecast, color = "Mean forecast"), linewidth = 1) +
+          # geom_line(aes(y = median_forecast, color = "Median forecast"), linewidth = 1) +
+          geom_point(aes(y = true, color = "True values"), shape = 16) +
+          geom_line(aes(y = true, color = "True values"), linetype = "dashed") +
+          scale_color_manual(values = c("Mean forecast" = "red",
+                                        "Median forecast" = "blue",
+                                        "True values" = "black")) +
+          labs(title = "Forecast with Bootstrapped Prediction Interval",
+               x = "Time step",
+               y = "Target value",
+               color = "") +
+          theme_minimal() +
+          theme(axis.text.x = element_text(angle = 45, hjust = 1)))
+}
+
+
+
+
+# plot observed vs predicted
+
+ggplot(test_predictions_boot, aes(x = y_test, y = mean_preds)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  facet_wrap(~ id, scales = "free") +
+  labs(
+    x = "Observed",
+    y = "Predicted",
+    title = "Observed vs Predict per ID"
+  ) +
+  theme_minimal()
+
+
+test_predictions_boot <- test_predictions_boot %>%
+  mutate(resid = y_test - mean_preds)
+
+ggplot(test_predictions_boot, aes(x = mean_preds, y = resid)) +
+  geom_point(alpha = 0.4) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Predicted",
+    y = "Residual (Observed – Predicted)",
+    title = "Residual plot"
+  ) +
+  theme_minimal()
+
+
+ggplot(test_predictions_boot, aes(x = mean_preds, y = resid)) +
+  
+  # Punktwolke
+  geom_point(aes(color = abs(resid)),
+             alpha = 0.45, size = 2) +
+  
+  # Smooth line (zeigt systematische Biases)
+  geom_smooth(method = "loess", se = FALSE, color = "#2c3e50", linewidth = 1.1) +
+  
+  # Zero-line
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.7) +
+  
+  scale_color_gradient(low = "#74add1", high = "#d73027",
+                       name = "|Residual|") +
+  
+  labs(
+    x = "Predicted",
+    y = "Residual (Observed – Predicted)",
+    title = "Residual Plot",
+    subtitle = "systematic over- and underestimation"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "right",
+    panel.grid.minor = element_blank()
+  )
+
+
+
+
+
+
+########### plot RLR-RESID-BS with historical data#######
+# Plot individual plots for 5 unique IDs
+for (example_id in unique(test_metrics_boot$id)[9:12]) {
+  #TODO: historical data mit plotten
+  # Extract training + test predictions for this ID
+  y_train <- (raw_data_long_imp2 %>% filter(id == example_id, counter %in% train_val_counters, item == "positive_physical_health_behavior"))$value
+  y_test  <- (test_predictions_resid_boot %>% filter(id == example_id))$y_test
+  y_pred_mean   <- (test_predictions_resid_boot %>% filter(id == example_id))$mean_preds
+  # y_pred_median <- (test_predictions_resid_boot %>% filter(id == example_id))$median_preds
+  lower <- (test_predictions_resid_boot %>% filter(id == example_id))$pred_lower
+  upper <- (test_predictions_resid_boot %>% filter(id == example_id))$pred_upper
+  
+  n_train <- length(y_train)
+  n_test  <- length(y_test)
+  
+  # Historical data frame
+  df_hist <- data.frame(
+    time = 1:n_train,
+    true = y_train,
+    type = "Historical"
+  )
+  
+  # Test + forecast data frame
+  df_test <- data.frame(
+    time = (n_train + 1):(n_train + n_test),
+    true = y_test,
+    mean_forecast = y_pred_mean,
+    # median_forecast = y_pred_median,
+    lower = lower,
+    upper = upper,
+    type = "Test"
+  )
+  
+  # Merge for plotting
+  boot_plot_df <- df_test
+  
+  print(
+    ggplot() +
+      geom_ribbon(
+        data = boot_plot_df,
+        aes(x = time, ymin = lower, ymax = upper, fill = "95% Prediction Interval"),
+        alpha = 0.2
+      ) +
+      geom_line(
+        data = boot_plot_df,
+        aes(x = time, y = mean_forecast, color = "Mean forecast"),
+        linewidth = 1
+      ) +
+      # geom_line(
+      #  data = boot_plot_df,
+      #  aes(x = time, y = median_forecast, color = "Median forecast"),
+      #  linewidth = 1
+      # ) +
+      geom_point(
+        data = boot_plot_df,
+        aes(x = time, y = true, color = "Observed values"),
+        shape = 16
+      ) +
+      geom_line(
+        data = boot_plot_df,
+        aes(x = time, y = true, color = "Observed values"),
+        linetype = "dashed"
+      ) +
+      geom_line(
+        data = df_hist,
+        aes(x = time, y = true, color = "Historical data"),
+        linewidth = 1
+      ) +
+      scale_color_manual(values = c(
+        "Mean forecast" = "red",
+        # "Median forecast" = "blue",
+        "Observed values" = "black",
+        "Historical data" = "grey40"
+      )) +
+      scale_fill_manual(values = c(
+        "95% Prediction Interval" = "red"
+      )) +
+      labs(
+        title = paste0("Regularized linear Regression with bootstrapped PI — ID ", example_id),
+        x = "Time step",
+        y = "Target value",
+        color = "",
+        fill  = ""
+      ) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  )
+  
+}
+
+
+
 ########################################################################################################################
 ####################################### RESIDUAL Bootstrapping for Prediction Intervals #########################################
 ########################################################################################################################
 # Fit glm and predict target item per id
 test_metrics_resid_boot <- tibble() #accuracy metrics
-test_predictions__resid_boot <- tibble() # mean_preds, median_preds, y_test, PI, and PI eval 
+test_predictions_resid_boot <- tibble() # mean_preds, median_preds, y_test, PI, and PI eval 
 for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missings in validation set --> no HPO possible
     # Get optimal HPs per id
     alpha_i <- (opt_hps %>% filter(id == id_i))$alpha

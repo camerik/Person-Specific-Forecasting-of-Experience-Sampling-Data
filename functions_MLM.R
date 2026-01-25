@@ -424,7 +424,6 @@ undo_diff_and_detrend_single <- function(values, counters, transformation, param
   return(restored)
 }
 
-
 undo_diff_and_detrend_matrix <- function(values, counters, transformation, params) {
   # Ensure correct order by counter
   ord <- order(counters)
