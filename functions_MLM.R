@@ -1,3 +1,13 @@
+ACF_plot <- function(data, item, max_lag = 10) {
+  data %>%
+    dplyr::filter(item == item) %>%
+    dplyr::arrange(id, counter) %>%
+    tsibble::as_tsibble(key = id, index = counter) %>%
+    feasts::ACF(value, lag_max = max_lag) %>%
+    fabletools::autoplot() +
+    ggplot2::facet_wrap(~ id)
+}
+
 interpolate <- function(df, counters, interpolation_type="spline", min_value=0, max_value=100) {
   if (interpolation_type == "linear") {
     df_inter <- df %>%

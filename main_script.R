@@ -301,9 +301,9 @@ raw_data_long_imp %>%
   theme_classic()
 
 
-ACF_plot <- function(data, target_item, max_lag = 10) {
+ACF_plot <- function(data, item, max_lag = 10) {
   data %>%
-    dplyr::filter(item == target_item) %>%
+    dplyr::filter(item == item) %>%
     dplyr::arrange(id, counter) %>%
     tsibble::as_tsibble(key = id, index = counter) %>%
     feasts::ACF(value, lag_max = max_lag) %>%
@@ -313,7 +313,7 @@ ACF_plot <- function(data, target_item, max_lag = 10) {
 
 
 
-ACF_plot(raw_data_long_imp, target_item = "positive_physical_health_behavior")
+ACF_plot(raw_data_long_imp, item = "positive_physical_health_behavior")
 
 
 # range of answer categories (all items have the same possible answer categories 0-100)
