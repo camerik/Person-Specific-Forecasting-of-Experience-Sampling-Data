@@ -1,5 +1,5 @@
 ############################################### Questions #######################################################
-
+citation("glmnet")
 #TODO:Ask bzgl. split bereits VOR ausschluss von ids mit geringer varianz, missings etc? 
 
 
@@ -256,7 +256,7 @@ n_id_5 = length(unique(raw_data_long$id))
 
 
 # Check for IDs with missings in val data (important for HPO)
-ids_with_nas_val <- raw_data_long_imp %>%
+ids_with_nas_val <- raw_data_long %>%
   filter(counter %in% val_counters) %>%
   group_by(id) %>% 
   summarise(has_na = any(is.na(value))) %>%
@@ -264,78 +264,64 @@ ids_with_nas_val <- raw_data_long_imp %>%
   pull(id)
 
 # Remove IDs with missings in val data
-raw_data_long_imp <- raw_data_long_imp %>%
+raw_data_long <- raw_data_long %>%
   filter (!( id %in% ids_with_nas_val))
-n_id_6 = length(unique(raw_data_long_imp$id))
+n_id_6 = length(unique(raw_data_long$id))
 
 
 # ---------------------Descriptive statistics---------------------------------------------------------------
-# Calculate in-person statistics and plot counts of answers per item over all ids (Westhoff et al., 2024)
-data_statistics = raw_data_long_imp %>%
-  dplyr::group_by(id) %>%
-  dplyr::summarize(across(all_of(feature_names),
-                          list(
-                            mean = ~ mean(.x, na.rm = T),
-                            sd = ~ sd(.x, na.rm = T)
-                          ),
-                          .names = "{.col}_{.fn}")) %>%
-  ungroup()
-
-# plot 4 example features
-raw_data_long_imp %>%
-  dplyr::select(all_of(feature_names[13:16])) %>%
-  tidyr::pivot_longer(cols = everything()) %>%
-  ggplot(aes(x = value)) +
-  geom_histogram(bins=20, na.rm=TRUE) +
-  facet_grid(~ name) +
-  theme_classic()
-
-# plot person specific counts for example id
-example_id <- 68177
-
-raw_data_long_imp %>%
-  dplyr::filter(id == example_id) %>%
-  dplyr::select(all_of(feature_names[2])) %>%
-  ggplot(aes(x = .data[[feature_names[2]]])) +
-  geom_histogram(bins = 20, na.rm = TRUE) +
-  theme_classic()
-
-
-ACF_plot <- function(data, item, max_lag = 10) {
-  data %>%
-    dplyr::filter(item == item) %>%
-    dplyr::arrange(id, counter) %>%
-    tsibble::as_tsibble(key = id, index = counter) %>%
-    feasts::ACF(value, lag_max = max_lag) %>%
-    fabletools::autoplot() +
-    ggplot2::facet_wrap(~ id)
-}
-
-
-
-ACF_plot(raw_data_long_imp, item = "positive_physical_health_behavior")
-
-
 # range of answer categories (all items have the same possible answer categories 0-100)
 range_answer_cat =  raw_data %>%
   dplyr::select(all_of(feature_names)) %>%
   unlist() %>%
   range(na.rm = TRUE)
+
+# Calculate in-person statistics and plot counts of answers per item over all ids (Westhoff et al., 2024)
+data_statistics <- raw_data_long %>%
+  dplyr::group_by(id, item) %>%
+  dplyr::summarise(
+    mean = mean(value, na.rm = TRUE),
+    sd   = sd(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+# plot 4 example features
+raw_data_long %>%
+  dplyr::filter(item %in% feature_names[13:16]) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 20, na.rm = TRUE) +
+  facet_wrap(~ item) +
+  theme_classic()
+
+# plot person specific counts for example id
+example_id <- 68177
+
+raw_data_long %>%
+  dplyr::filter(id == example_id, item == feature_names[2]) %>%
+  ggplot(ggplot2::aes(x = value)) +
+  ggplot2::geom_histogram(bins = 20, na.rm = TRUE) +
+  ggplot2::theme_classic()
+
+
+ACF_plot(raw_data_long, chosen_item = "positive_physical_health_behavior")
+
 #---------------------------------------------------------------------------------------------------
 
-#################################### Prepare Data for HPO ######################################
+#################################### Prepare Data for HPO ##########################################
+
 # Interpolate
-# TODO: Interpolate with different strategy? Check for strategy which takes seasonality into account or 
-# search for papers which investigated impact of imputation strategy on forecast accuracy and uncertainty
 interpolation_type = "spline"
 
-# Source for AR(1)-DF-Test and Stationarity Transformations:
-# Ryan et al. (2025) (adf_flow in diagnose_trend_type)
 raw_data_long_imp <- interpolate(raw_data_long, train_counters, interpolation_type)
 
 # Check if there are any NAs left
 sum(is.na(raw_data_long_imp %>% filter(counter %in% train_counters)))
 
+
+
+# Source for AR(1)-DF-Test and Stationarity Transformations:
+# Ryan et al. (2025) (adf_flow in diagnose_trend_type)
 # Compute detrending components to detrend data
 trend_parameter_hpo <- diagnose_trend_type(raw_data_long_imp %>% filter(counter %in% train_counters))
 

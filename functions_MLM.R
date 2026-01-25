@@ -1,6 +1,6 @@
-ACF_plot <- function(data, item, max_lag = 10) {
+ACF_plot <- function(data, chosen_item, max_lag = 10) {
   data %>%
-    dplyr::filter(item == item) %>%
+    dplyr::filter(item == chosen_item) %>%
     dplyr::arrange(id, counter) %>%
     tsibble::as_tsibble(key = id, index = counter) %>%
     feasts::ACF(value, lag_max = max_lag) %>%
@@ -8,31 +8,49 @@ ACF_plot <- function(data, item, max_lag = 10) {
     ggplot2::facet_wrap(~ id)
 }
 
-interpolate <- function(df, counters, interpolation_type="spline", min_value=0, max_value=100) {
+interpolate <- function(df, counters,
+                        interpolation_type = "spline",
+                        min_value = 0, max_value = 100) {
+  
   if (interpolation_type == "linear") {
+    
     df_inter <- df %>%
-      group_by(id, item) %>%
-      mutate(
-        value = ifelse(
-          counter %in% counters, # training and val set
-          na.approx(value, x = counter, na.rm = FALSE), 
-          value  # keep original value otherwise
-        ),
-        value = pmin(pmax(value, min_value), max_value)
-      ) %>%
-      ungroup()
-  } else if (interpolation_type == "spline") {
-    df_inter <- df %>%
-      group_by(id, item) %>%
-      mutate(
-        value = ifelse(
-          counter %in% counters,
-          na.spline(value, x = counter),  # interpolate only for train_counters
+      dplyr::group_by(id, item) %>%
+      dplyr::mutate(
+        value = if (any(counter %in% counters)) {
+          v <- value
+          trainsplit <- counter %in% counters # makes sure that na.spline only uses data from training split
+          v[trainsplit] <- zoo::na.approx(
+            v[trainsplit],
+            x = counter[trainsplit],
+            na.rm = FALSE
+          )
+          v
+        } else {
           value
-        ),
-        value = pmin(pmax(value, min_value), max_value) # allowed range eingrenzen 
+        },
+        value = pmin(pmax(value, min_value), max_value)  # clip to original scale
       ) %>%
-      ungroup()
+      dplyr::ungroup()
+  } else if (interpolation_type == "spline") {
+     df_inter <- df %>%
+      dplyr::group_by(id, item) %>%
+      dplyr::mutate(
+        value = if (any(counter %in% counters)) {
+          v <- value
+          trainsplit <- counter %in% counters
+          v[trainsplit] <- zoo::na.spline( # makes sure that na.spline only uses data from training split
+            v[trainsplit],
+            x = counter[trainsplit]
+          )
+          v
+        } else {
+          value
+        },
+        value = pmin(pmax(value, min_value), max_value)  # clip to original scale
+      ) %>%
+      dplyr::ungroup()
+    
   } else {
     stop("Interpolation type not implemented!")
   }
