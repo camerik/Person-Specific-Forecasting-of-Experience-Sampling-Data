@@ -608,24 +608,24 @@ compute_metrics <- function(y_obs, y_pred,
   ))
 }
 
-# bootstrap via residuals for glmnet
+# bootstrap using resampled residuals for Elastic Net Regression (see Hyndman & Athanasopolous)
 
 resid_bootstrap <- function(
-    X_train, y_train, X_test,
-    alpha, lambda,
+    X_train, y_train, X_test, # X_train and X_test neet to be matrices, y_train needs to be a numerical vecotr
+    alpha, lambda, # otpimized alpha and lambda
     B = 500,
     seed = 47,
     standardize = FALSE
 ) {
-  stopifnot(is.matrix(X_train), is.matrix(X_test))
-  y_train_vec <- as.numeric(y_train)
+
+
   
   set.seed(seed)
   
   #Fit with fixed lambda
   fit0 <- glmnet(
     x = X_train,
-    y = y_train_vec,
+    y = y_train,
     alpha = alpha,
     lambda = lambda,         
     standardize = standardize
@@ -633,33 +633,26 @@ resid_bootstrap <- function(
   
   # compute residual for each forecast step 
   yhat_train <- as.vector(predict(fit0, newx = X_train, s = lambda))
-  e <- y_train_vec - yhat_train
+  e <- y_train- yhat_train # n of residuals = length(y_train)
   
-  # Bootstrap refit predictions
+  #Point forecast for test set
+  mu_point <- as.vector(predict(fit0, newx = X_test, s = lambda))
+  
+  # Bootstrap predictive distribution: y_{test}^{*(b)} = mu_point + e^{*(b)}
   n_test <- nrow(X_test)
-  mu_boot <- matrix(NA_real_, nrow = n_test, ncol = B)
+  y_boot <- matrix(NA_real_, nrow = n_test, ncol = B)
   
   for (b in seq_len(B)) {
-    # residual bootstrap
-    e_star <- sample(e, size = length(e), replace = TRUE)
-    y_star <- yhat_train + e_star
-    
-    fit_b <- glmnet(
-      x = X_train,
-      y = y_star,
-      alpha = alpha,
-      lambda = lambda,       
-      standardize = standardize
-    )
-    
-    mu_boot[, b] <- as.vector(predict(fit_b, newx = X_test, s = lambda))
+    e_sample <- sample(e, size = n_test, replace = TRUE)
+    y_boot[, b] <- mu_point + e_sample
   }
   
-  # Return bootstrap distribution + summary
   list(
-    fit0 = fit0,
-    mu_point = as.vector(predict(fit0, newx = X_test, s = lambda)),
-    mu_boot = mu_boot
+    fit0      = fit0,
+    mu_point  = mu_point,   # conditional mean / point forecast
+    resid     = e,          # in-sample residuals used for resampling
+    y_boot    = y_boot      # bootstrap predictive distribution (for PI via quantiles)
+
   )
 }
 

@@ -1,5 +1,4 @@
 ############################################### Questions #######################################################
-citation("glmnet")
 #TODO:Ask bzgl. split bereits VOR ausschluss von ids mit geringer varianz, missings etc? 
 
 
@@ -34,11 +33,11 @@ source("git-ordner/Uncertainty-Quantification-in-ESM-Time-Series-Forecast/functi
 # renv::project()
 # renv::snapshot(force = T)
 # renv::dependencies()
-renv::status()
+# renv::status()
 # readLines(".renvignore")
+#renv::restore()
 
-
-.libPaths()
+#.libPaths()
 
 set.seed(42)
 
@@ -405,8 +404,7 @@ target_item <- "positive_physical_health_behavior"
 
 
 y_test_raw <- raw_data_long_imp %>% filter(item == target_item, counter %in% c(val_counters, test_counters))
-# Lambda-Grid-Search
-# lambda_seq<- 10^seq(1, -4, length.out = 50)  
+
 
 val_metrics <- tibble() # tibble for accuracy metrics per HPO combination
 i_iter = 0
@@ -437,7 +435,6 @@ for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
           X_train, y_train,
           alpha = alpha_i,
           standardize = FALSE,
-          #lambda = lambda_seq
         )
         print(glm_fit)
         
@@ -662,20 +659,20 @@ all_predictions %>%
 # compute ACF of person-specific residuals 
 max_lag <- 3
 
-acf_per_id <- all_predictions %>%
+acf_resid <- all_predictions %>%
   arrange(id, counter) %>%
   group_by(id) %>%
   summarise(
     n = n(),
-    acf = list(stats::acf(resid, plot = FALSE, lag.max = min(max_lag, n - 1))$acf[-1]),
-    # [-1] entfernt Lag 0 (immer 1)
+    acf = list(stats::acf(resid, plot = T, lag.max = min(max_lag, n - 1))$acf[-1]),
+    # [-1] removes lag 0 
     acf_lag1 = ifelse(length(acf[[1]]) >= 1, acf[[1]][1], NA_real_),
     acf_lag2 = ifelse(length(acf[[1]]) >= 2, acf[[1]][2], NA_real_),
     acf_lag3 = ifelse(length(acf[[1]]) >= 3, acf[[1]][3], NA_real_),
     .groups = "drop"
   )
 
-acf_per_id
+acf_resid
 # Visualize 
 all_predictions %>%
   arrange(id, counter) %>%
@@ -757,12 +754,6 @@ perm_test
 ########################################################################################################################
 ####################################### Bootstrapping for Prediction Intervals #########################################
 ########################################################################################################################
-# Aber: Wert von Prädiktor x zu Zeitpunkt t kommt zwar in mehreren Zeilen vor, ABER, nicht als
-# gleiches Feature, denn: Prädiktor x zu Zeitpunkt t ist in Zeile t+1 in Spalte x_lag1 und in Zeile 
-# t+2 in Spalte x_lag2 etc.  
-
-
-
 # Problem: wenn ich block bootstrapping wie in Xu & Xie (2021) anwende: 
 # pro Block 20-50 obs. 
 #--> z.B. 3 * 30 bootstrap Blöcke 
@@ -772,9 +763,7 @@ perm_test
 # dann hätte ich 3 Blöcke aus denen mit zurücklegen gezogen werden kann. 
 # 
 
-
 n_bootstrap <- 500 
-
 
 # Fit glm and predict target item per id
 test_metrics_boot <- tibble() #accuracy metrics
@@ -817,7 +806,7 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
     glm_fit <- glmnet(X_sample, y_sample, alpha = alpha_i, standardize = FALSE, trace.it = T, lambda=lambda_i) # Already STD
     
     # Predict on test set using a set lambda
-    preds <- predict(glm_fit, newx = X_test)
+    preds <- predict(glm_fit, newx = X_test, s = lambda_i)
     
     # Undo standardization
     mean___ <- (std_stats_eval %>% filter(id == id_i, item == target_item))$mean_eval
@@ -968,17 +957,17 @@ ggplot(test_predictions_boot, aes(x = mean_preds, y = resid)) +
 
 
 
-########### plot RLR-RESID-BS with historical data#######
+########### plot RLR-BS with historical data#######
 # Plot individual plots for 5 unique IDs
 for (example_id in unique(test_metrics_boot$id)[9:12]) {
   #TODO: historical data mit plotten
   # Extract training + test predictions for this ID
   y_train <- (raw_data_long_imp2 %>% filter(id == example_id, counter %in% train_val_counters, item == "positive_physical_health_behavior"))$value
-  y_test  <- (test_predictions_resid_boot %>% filter(id == example_id))$y_test
-  y_pred_mean   <- (test_predictions_resid_boot %>% filter(id == example_id))$mean_preds
-  # y_pred_median <- (test_predictions_resid_boot %>% filter(id == example_id))$median_preds
-  lower <- (test_predictions_resid_boot %>% filter(id == example_id))$pred_lower
-  upper <- (test_predictions_resid_boot %>% filter(id == example_id))$pred_upper
+  y_test  <- (test_predictions_boot %>% filter(id == example_id))$y_test
+  y_pred_mean   <- (test_predictions_boot %>% filter(id == example_id))$mean_preds
+  y_pred_median <- (test_predictions_boot %>% filter(id == example_id))$median_preds
+  lower <- (test_predictions_boot %>% filter(id == example_id))$pred_lower
+  upper <- (test_predictions_boot %>% filter(id == example_id))$pred_upper
   
   n_train <- length(y_train)
   n_test  <- length(y_test)
@@ -995,7 +984,7 @@ for (example_id in unique(test_metrics_boot$id)[9:12]) {
     time = (n_train + 1):(n_train + n_test),
     true = y_test,
     mean_forecast = y_pred_mean,
-    # median_forecast = y_pred_median,
+    median_forecast = y_pred_median,
     lower = lower,
     upper = upper,
     type = "Test"
@@ -1016,11 +1005,11 @@ for (example_id in unique(test_metrics_boot$id)[9:12]) {
         aes(x = time, y = mean_forecast, color = "Mean forecast"),
         linewidth = 1
       ) +
-      # geom_line(
-      #  data = boot_plot_df,
-      #  aes(x = time, y = median_forecast, color = "Median forecast"),
-      #  linewidth = 1
-      # ) +
+       geom_line(
+        data = boot_plot_df,
+        aes(x = time, y = median_forecast, color = "Median forecast"),
+        linewidth = 1
+       ) +
       geom_point(
         data = boot_plot_df,
         aes(x = time, y = true, color = "Observed values"),
@@ -1038,7 +1027,7 @@ for (example_id in unique(test_metrics_boot$id)[9:12]) {
       ) +
       scale_color_manual(values = c(
         "Mean forecast" = "red",
-        # "Median forecast" = "blue",
+        "Median forecast" = "blue",
         "Observed values" = "black",
         "Historical data" = "grey40"
       )) +
@@ -1104,14 +1093,14 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
       )
       
       # Bootstrap-Verteilung 
-      mu_boot <- boot$mu_boot         # n_test x B
+      y_boot <- boot$y_boot         # n_test x B
       mu_point <- boot$mu_point       # n_test
       
-      pred_lower <- apply(mu_boot, 1, quantile, probs = 0.025, na.rm = TRUE)
-      pred_upper <- apply(mu_boot, 1, quantile, probs = 0.975, na.rm = TRUE)
+      pred_lower <- apply(y_boot, 1, quantile, probs = 0.025, na.rm = TRUE)
+      pred_upper <- apply(y_boot, 1, quantile, probs = 0.975, na.rm = TRUE)
       
       # bootstrap mean as point forecast (or median?)
-      mu_mean <- rowMeans(mu_boot, na.rm = TRUE)
+      mu_mean <- rowMeans(y_boot, na.rm = TRUE)
       
       
       # Undo standardization
@@ -1152,20 +1141,32 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
     
   
   # Compute metrics
-  test_metrics_i <- compute_metrics(y_test, mu_mean, pred_lower, pred_upper)
-  test_metrics_i <- test_metrics_i %>% mutate(id = id_i, n_lags=n_lags_i, alpha=alpha_i, lambda = lambda_i)
-  test_metrics_resid_boot <- bind_rows(test_metrics_resid_boot, test_metrics_i)
+  test_metrics_resid_i <- compute_metrics(y_test, mu_mean, pred_lower, pred_upper)
+  test_metrics_resid_i <- test_metrics_resid_i %>% mutate(id = id_i, n_lags=n_lags_i, alpha=alpha_i, lambda = lambda_i)
+  test_metrics_resid_boot <- bind_rows(test_metrics_resid_boot, test_metrics_resid_i)
   
   
 }
 
+# UQ Comparison: bootstrapping vs. bootstrap using resampled residuals
+mean(test_metrics_resid_boot$Coverage)
+mean(test_metrics_boot$Coverage)
+
+mean(test_metrics_resid_boot$interval_width)
+mean(test_metrics_boot$interval_width)
+
+range(test_metrics_resid_boot$Coverage)
+range(test_metrics_boot$Coverage)
+
+range(test_metrics_resid_boot$interval_width)
+range(test_metrics_boot$interval_width)
 
 # Plot individual plots for 5 unique IDs
 for (example_id in unique(test_metrics_boot$id)[5:8]) {
   
   y_test <- (test_predictions_resid_boot %>% filter(id == example_id))$y_test
   y_pred_mean <- (test_predictions_resid_boot %>% filter(id == example_id))$mean_preds
-  y_pred_median <- (test_predictions_resid_boot %>% filter(id == example_id))$median_preds
+  # y_pred_median <- (test_predictions_resid_boot %>% filter(id == example_id))$median_preds
   lower <- (test_predictions_resid_boot %>% filter(id == example_id))$pred_lower
   upper <- (test_predictions_resid_boot %>% filter(id == example_id))$pred_upper
   
@@ -1344,7 +1345,7 @@ for (example_id in unique(test_metrics_boot$id)[9:12]) {
         "95% Prediction Interval" = "red"
       )) +
       labs(
-        title = paste0("Regularized linear Regression with bootstrapped PI — ID ", example_id),
+        title = paste0("Elastic Net Regression with residual bootstrapped PI — ID ", example_id),
         x = "Time step",
         y = "Target value",
         color = "",
@@ -1357,12 +1358,11 @@ for (example_id in unique(test_metrics_boot$id)[9:12]) {
 }
 
 mean(test_metrics_boot$RMSE)
-#21.63
-#median(test_metrics_boot$RMSE)
-#20.25
+median(test_metrics_boot$RMSE)
 range(test_metrics_boot$RMSE)
-# 5.801475 48.536406
 range(test_metrics_boot$Coverage)
+
+range(test_metrics_resid_boot$Coverage)
 #-------------------------------------------------------------------------------------------------------------------------------------------------
 #--------------Random forest regression------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------------------------------------
