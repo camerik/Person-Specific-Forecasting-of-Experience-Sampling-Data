@@ -618,42 +618,76 @@ resid_bootstrap <- function(
     standardize = FALSE
 ) {
 
-
-  
-  set.seed(seed)
-  
-  #Fit with fixed lambda
-  fit0 <- glmnet(
-    x = X_train,
-    y = y_train,
-    alpha = alpha,
-    lambda = lambda,         
-    standardize = standardize
-  )
-  
-  # compute residual for each forecast step 
-  yhat_train <- as.vector(predict(fit0, newx = X_train, s = lambda))
-  e <- y_train- yhat_train # n of residuals = length(y_train)
-  
-  #Point forecast for test set
-  mu_point <- as.vector(predict(fit0, newx = X_test, s = lambda))
-  
-  # Bootstrap predictive distribution: y_{test}^{*(b)} = mu_point + e^{*(b)}
-  n_test <- nrow(X_test)
-  y_boot <- matrix(NA_real_, nrow = n_test, ncol = B)
-  
-  for (b in seq_len(B)) {
-    e_sample <- sample(e, size = n_test, replace = TRUE)
-    y_boot[, b] <- mu_point + e_sample
+    
+    set.seed(seed)
+    
+    #Fit with fixed lambda
+    fit0 <- glmnet(
+      x = X_train,
+      y = y_train,
+      alpha = alpha,
+      lambda = lambda,         
+      standardize = standardize
+    )
+    
+    # compute residual for each forecast step 
+    yhat_train <- as.vector(predict(fit0, newx = X_train, s = lambda))
+    e <- y_train - yhat_train
+    
+    # Bootstrap refit predictions
+    n_test <- nrow(X_test)
+    mu_boot <- matrix(NA_real_, nrow = n_test, ncol = B)
+    
+    for (b in seq_len(B)) {
+      # residual bootstrap
+      e_star <- sample(e, size = length(e), replace = TRUE)
+      y_star <- yhat_train + e_star
+      
+      fit_b <- glmnet(
+        x = X_train,
+        y = y_star,
+        alpha = alpha,
+        lambda = lambda,       
+        standardize = standardize
+      )
+      
+      mu_boot[, b] <- as.vector(predict(fit_b, newx = X_test, s = lambda))
+    }
+    
+    # Return bootstrap distribution + summary
+    list(
+      fit0 = fit0,
+      mu_point = as.vector(predict(fit0, newx = X_test, s = lambda)),
+      mu_boot = mu_boot
+    )
   }
+
+# Block Bootstrap - Stationary Bootstrap as described in (Politis & Romano, 1992)
+statistic_forecast <- function(
+    tseries, X_test, alpha, lambda,
+    mean___, sd___,
+    test_counters,
+    transformation, params) {
   
-  list(
-    fit0      = fit0,
-    mu_point  = mu_point,   # conditional mean / point forecast
-    resid     = e,          # in-sample residuals used for resampling
-    y_boot    = y_boot      # bootstrap predictive distribution (for PI via quantiles)
-
+  set.seed(47) # TODO: check again if it works now
+  
+  # tseries: bootstrap replicate of length n.sim
+  y_b <- as.numeric(tseries[, 1])
+  X_b <- as.matrix(tseries[, -1, drop = FALSE])
+  # Fit glmnet on bootstrapped ts
+  fit_b <- glmnet(
+    x = X_b,
+    y = y_b,
+    alpha = alpha,
+    lambda = lambda_i,
+    standardize = FALSE
   )
+  # Predict on test set
+  preds <- as.numeric(predict(fit_b, newx = X_test, s = lambda_i))
+  # Undo standardization (same as original)
+  preds <- preds * sd___ + mean___
+  # Undo detrending/differencing (same as original)
+  preds <- undo_diff_and_detrend_single(preds, test_counters, transformation, params)
+  return(preds)  # numeric vector length = nrow(X_test)X_test    = X_test,
 }
-
 

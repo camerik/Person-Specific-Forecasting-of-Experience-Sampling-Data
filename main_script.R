@@ -1,19 +1,12 @@
 ############################################### Questions #######################################################
 #TODO:Ask bzgl. split bereits VOR ausschluss von ids mit geringer varianz, missings etc? 
-
-
 # TODO:
 # Opt_hpo_resuluts anschauen, immer noch überall n_lag 7? 
 #   Anzahl bäume? Nodesize? 
-#   
-#   Überlegen: wieso überall systematische überschätzung geringer werte und unterschätzung hoher werte Zu bias, response scale ist … schlauch..hecks kommentar noch mal durchdenken
-# 
-# Diskutieren, funkt nicht mal bei meinen daten 
-# Residual plots  predicted statt observed 
-# 
+
 # Keine runde sache wenn ich über warnsysteme etc spreche und dann einen datensatz zu psych flexibilität nehme? 
 #   
-#   Gab es anker bei fragestellung? Slider der direkt bei 50 war? 
+#   Gab es anker bei fragestellung? Slider zu Beginn mittig platziert? 
   
 
 ############################################### Initialization ##########################################################
@@ -1093,14 +1086,14 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
       )
       
       # Bootstrap-Verteilung 
-      y_boot <- boot$y_boot         # n_test x B
+      mu_boot <- boot$mu_boot         # n_test x B
       mu_point <- boot$mu_point       # n_test
       
-      pred_lower <- apply(y_boot, 1, quantile, probs = 0.025, na.rm = TRUE)
-      pred_upper <- apply(y_boot, 1, quantile, probs = 0.975, na.rm = TRUE)
+      pred_lower <- apply(mu_boot, 1, quantile, probs = 0.025, na.rm = TRUE)
+      pred_upper <- apply(mu_boot, 1, quantile, probs = 0.975, na.rm = TRUE)
       
       # bootstrap mean as point forecast (or median?)
-      mu_mean <- rowMeans(y_boot, na.rm = TRUE)
+      mu_mean <- rowMeans(mu_boot, na.rm = TRUE)
       
       
       # Undo standardization
@@ -1149,17 +1142,64 @@ for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missi
 }
 
 # UQ Comparison: bootstrapping vs. bootstrap using resampled residuals
-mean(test_metrics_resid_boot$Coverage)
-mean(test_metrics_boot$Coverage)
+uq_comparison_table <- tibble(
+  Method = c(
+    "Standard Bootstrap",
+    "Bootstrap - Resampled Residuals"
+  ),
+  `Coverage (Mean)` = c(
+    mean(test_metrics_boot$Coverage, na.rm = TRUE),
+    mean(test_metrics_resid_boot$Coverage, na.rm = TRUE)
+  ),
+  `Coverage (Range)` = c(
+    sprintf(
+      "%.3f--%.3f",
+      min(test_metrics_boot$Coverage, na.rm = TRUE),
+      max(test_metrics_boot$Coverage, na.rm = TRUE)
+    ),
+    sprintf(
+      "%.3f--%.3f",
+      min(test_metrics_resid_boot$Coverage, na.rm = TRUE),
+      max(test_metrics_resid_boot$Coverage, na.rm = TRUE)
+    )
+  ),
+  `Interval width (Mean)` = c(
+    mean(test_metrics_boot$interval_width, na.rm = TRUE),
+    mean(test_metrics_resid_boot$interval_width, na.rm = TRUE)
+  ),
+  `Interval width (Range)` = c(
+    sprintf(
+      "%.3f--%.3f",
+      min(test_metrics_boot$interval_width, na.rm = TRUE),
+      max(test_metrics_boot$interval_width, na.rm = TRUE)
+    ),
+    sprintf(
+      "%.3f--%.3f",
+      min(test_metrics_resid_boot$interval_width, na.rm = TRUE),
+      max(test_metrics_resid_boot$interval_width, na.rm = TRUE)
+    )
+  )
+)
 
-mean(test_metrics_resid_boot$interval_width)
-mean(test_metrics_boot$interval_width)
+uq_comparison_table %>%
+  kable(
+    format = "latex",
+    booktabs = TRUE,
+    digits = 3,
+    caption = "Comparison of UQ methods: Standard Bootstrap vs. Bootstrap - Resampled Residuals",
+    align = "lcccc"
+  ) %>%
+  add_header_above(
+    c(" " = 1, "Coverage" = 2, "Interval width" = 2)
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position"),
+    font_size = 10
+  ) %>%
+  column_spec(1, width = "4cm") %>%
+  column_spec(3, width = "3cm") %>%
+  column_spec(5, width = "3cm")
 
-range(test_metrics_resid_boot$Coverage)
-range(test_metrics_boot$Coverage)
-
-range(test_metrics_resid_boot$interval_width)
-range(test_metrics_boot$interval_width)
 
 # Plot individual plots for 5 unique IDs
 for (example_id in unique(test_metrics_boot$id)[5:8]) {
@@ -1251,8 +1291,7 @@ ggplot(test_predictions_resid_boot, aes(x = mean_preds, y = resid)) +
   labs(
     x = "Predicted",
     y = "Residual (Observed – Predicted)",
-    title = "Residual Plot",
-    subtitle = "systematic over- and underestimation"
+    title = "Residual Plot"
   ) +
   
   theme_minimal(base_size = 14) +
@@ -1261,10 +1300,6 @@ ggplot(test_predictions_resid_boot, aes(x = mean_preds, y = resid)) +
     legend.position = "right",
     panel.grid.minor = element_blank()
   )
-
-
-
-
 
 
 ########### plot RLR-RESID-BS with historical data#######
@@ -1766,7 +1801,7 @@ ggplot(test_predictions_resid_boot, aes(x = median_preds, y = resid)) +
 geom_point(aes(color = abs(resid)),
            alpha = 0.45, size = 2) +
   
-  # Smooth line (zeigt systematische Biases)
+  # Smooth line 
   geom_smooth(method = "loess", se = FALSE, color = "#2c3e50", linewidth = 1.1) +
   
   # Zero-line
@@ -1778,8 +1813,7 @@ geom_point(aes(color = abs(resid)),
   labs(
     x = "Predicted value",
     y = "Residual (Observed – Predicted)",
-    title = "Residual Plot RLR-BS",
-    subtitle = "systematic over- and underestimation"
+    title = "Residual Plot RLR-BS"
   ) +
   
   theme_minimal(base_size = 14) +
@@ -1826,8 +1860,7 @@ ggplot(test_predictions_RFR, aes(x = median_preds, y = resid)) +
   labs(
     x = "Predicted value",
     y = "Residual (Observed – Predicted)",
-    title = "Residual Plot RFR",
-    subtitle = "systematic over- and underestimation"
+    title = "Residual Plot RFR"
   ) +
   
   theme_minimal(base_size = 14) +
