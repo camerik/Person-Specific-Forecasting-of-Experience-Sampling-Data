@@ -1731,11 +1731,11 @@ for (example_id in unique(test_metrics_RFR$id)[6:10]) {
         aes(x = time, ymin = lower, ymax = upper, fill = "95% Prediction Interval"),
         alpha = 0.2
       ) +
-      geom_line(
-        data = boot_plot_df,
-        aes(x = time, y = mean_forecast, color = "Mean forecast"),
-        linewidth = 1
-      ) +
+   #  geom_line(
+   #    data = boot_plot_df,
+   #    aes(x = time, y = mean_forecast, color = "Mean forecast"),
+   #    linewidth = 1
+   #  ) +
       geom_line(
         data = boot_plot_df,
         aes(x = time, y = median_forecast, color = "Median forecast"),
