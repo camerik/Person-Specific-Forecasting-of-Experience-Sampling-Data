@@ -4,7 +4,6 @@ check_ar1_residuals <- function(
     value_col = "value",
     id_col = "id",
     time_col = "counter",
-    pdq_spec = pdq(1, 0, 0), # AR(1) prespecified
     lag_max = 30,
     lb_lags = 10,
     make_plots = TRUE
@@ -20,7 +19,7 @@ check_ar1_residuals <- function(
   
   #Fit AR(1) per ID on train_val_set
   fits <- df %>%
-    model(AR1 = ARIMA(.data[[value_col]] ~ pdq_spec))
+    model(AR1 = ARIMA(.data[[value_col]] ~ pdq(1,0,0)))
   
   # Extract residuals
   #    augment() gives .resid aligned with the time index
@@ -62,15 +61,15 @@ check_ar1_residuals <- function(
     acf_plot <- aug %>%
       dplyr::filter(!is.na(resid)) %>%
       dplyr::group_by(.data[[id_col]]) %>%
-      feasts::ACF(resid, lag_max = lag_max) %>%
-      ggplot2::autoplot() +
-      ggplot2::facet_wrap(stats::as.formula(paste("~", id_col)), scales = "free_y") +
-      ggplot2::labs(
-        title = paste0("ACF of AR(1) training residuals — item: ", item_name),
-        x = "Lag",
-        y = "ACF"
-      ) +
-      ggplot2::theme_minimal()
+      feasts::ACF(resid, lag_max = lag_max) #%>%
+     #ggplot2::autoplot() +
+     #ggplot2::facet_wrap(stats::as.formula(paste("~", id_col)), scales = "free_y") +
+     #ggplot2::labs(
+     #  title = paste0("ACF of AR(1) training residuals — item: ", item_name),
+     #  x = "Lag",
+     #  y = "ACF"
+      #) +
+     # ggplot2::theme_minimal()
   }
   
   list(

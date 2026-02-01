@@ -669,7 +669,7 @@ statistic_forecast <- function(
     test_counters,
     transformation, params) {
   
-  set.seed(47) # TODO: check again if it works now
+  set.seed(47) # TODO: check again if it works
   
   # tseries: bootstrap replicate of length n.sim
   y_b <- as.numeric(tseries[, 1])

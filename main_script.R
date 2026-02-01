@@ -87,6 +87,7 @@ daily_feature_names = c("weekday", "sleep_quality")
 features_to_lag = setdiff(colnames(raw_data), c("id", "counter", "weekday", "day", "beep", "sleep_quality"))
 features_to_lag
 
+# --- LOW VARIANCE -----------------------------------------------------------------------------------
 # Check for and exclude ids with low variance: 
 # Cutoff: variance < 1 or ≥ 10 unique answer categories
 def_low_var <- "one"
@@ -125,16 +126,15 @@ if (def_low_var == "ten_unique") {
   print("cutoff not implemented")
 }
 
-
-# Remove ids with too many missing rows (!) (based on 2*std more than the mean of missing complete rows
-# per id)
+# --- MISSINGNESS ---------------------------------------------------------------------------------
+# Remove ids with too many missing rows (based on 2*std more than the mean of missing rows per id)
 beep_feature_names
 
 # pivot longer
 raw_data_long = raw_data %>%
   pivot_longer( cols = all_of(feature_names), names_to = "item", values_to = "value")
 
-# compute n missing rows per id  
+# compute n missing rows per ID  
 raw_data_long_missing_rows <- raw_data %>%
   mutate(
     row_missing = if_else(
@@ -175,7 +175,7 @@ raw_data <- raw_data %>%
   filter(id %in% valid_ids)
 
 n_id_3 = length(unique(raw_data$id))
-# excludes 5 participants
+# excludes 6 participants
 
 
 # Compute consecutive missing rows per id and exclude ids with 
@@ -296,7 +296,8 @@ raw_data_long %>%
   ggplot2::theme_classic()
 
 
-ACF_plot(raw_data_long, chosen_item = "positive_physical_health_behavior")
+#ACF_plot(raw_data_long, chosen_item = "positive_physical_health_behavior")
+ACF_plot(raw_data_long, chosen_item = "depressed")
 
 #---------------------------------------------------------------------------------------------------
 
@@ -392,8 +393,8 @@ mean(raw_data_long_eval %>% filter(id == unique(raw_data_long_eval$id)[1], item 
 ########################################################################################################################
 id_col <- "id"
 time_col <- "counter"
-target_item <- "positive_physical_health_behavior"
-
+# target_item <- "positive_physical_health_behavior"
+target_item <- "depressed"
 
 
 y_test_raw <- raw_data_long_imp %>% filter(item == target_item, counter %in% c(val_counters, test_counters))
@@ -955,7 +956,7 @@ ggplot(test_predictions_boot, aes(x = mean_preds, y = resid)) +
 for (example_id in unique(test_metrics_boot$id)[9:12]) {
   #TODO: historical data mit plotten
   # Extract training + test predictions for this ID
-  y_train <- (raw_data_long_imp2 %>% filter(id == example_id, counter %in% train_val_counters, item == "positive_physical_health_behavior"))$value
+  y_train <- (raw_data_long_imp2 %>% filter(id == example_id, counter %in% train_val_counters, item == target_item))$value
   y_test  <- (test_predictions_boot %>% filter(id == example_id))$y_test
   y_pred_mean   <- (test_predictions_boot %>% filter(id == example_id))$mean_preds
   y_pred_median <- (test_predictions_boot %>% filter(id == example_id))$median_preds
@@ -1307,7 +1308,7 @@ ggplot(test_predictions_resid_boot, aes(x = mean_preds, y = resid)) +
 for (example_id in unique(test_metrics_boot$id)[9:12]) {
   #TODO: historical data mit plotten
   # Extract training + test predictions for this ID
-  y_train <- (raw_data_long_imp2 %>% filter(id == example_id, counter %in% train_val_counters, item == "positive_physical_health_behavior"))$value
+  y_train <- (raw_data_long_imp2 %>% filter(id == example_id, counter %in% train_val_counters, item == target_item))$value
   y_test  <- (test_predictions_resid_boot %>% filter(id == example_id))$y_test
   y_pred_mean   <- (test_predictions_resid_boot %>% filter(id == example_id))$mean_preds
  # y_pred_median <- (test_predictions_resid_boot %>% filter(id == example_id))$median_preds
@@ -1693,7 +1694,7 @@ for (id_i in unique(df_hpo$id)) {
 for (example_id in unique(test_metrics_RFR$id)[6:10]) {
   #TODO: historical data mit plotten
   # Extract training + test predictions for this ID
-  y_train <- (raw_data_long_imp2 %>% filter(id == example_id, counter %in% train_val_counters, item == "positive_physical_health_behavior"))$value
+  y_train <- (raw_data_long_imp2 %>% filter(id == example_id, counter %in% train_val_counters, item == target_item))$value
   y_test  <- (test_predictions_RFR %>% filter(id == example_id))$y_test
   y_pred_median <- (test_predictions_RFR %>% filter(id == example_id))$median_preds
   lower <- (test_predictions_RFR %>% filter(id == example_id))$pred_lower
