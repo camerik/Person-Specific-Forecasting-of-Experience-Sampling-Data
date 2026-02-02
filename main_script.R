@@ -1,7 +1,7 @@
 ############################################### Initialization ##########################################################
 # Initialize renv, load functions and set seed for reproducability
-
-# TODO: Ask Björn: Mean or Median Prediction for Bootstrapping/Random Forests?
+citation("quantregForest")
+# TODO: Ask: Mean or Median Prediction for Bootstrapping/Random Forests?
 
 # Install and load required packages
 packages <- c("dplyr", "tidyr", "zoo", "purrr", "Metrics", "ggplot2", "glmnet", "coin",
@@ -36,8 +36,6 @@ if (load_from_file) {
 } else {
   raw_data = openesm::get_dataset("0008_westhoff")$data
 }
-
-
 
 
 ############################################# Preprocessing #############################################################
@@ -94,7 +92,7 @@ if (def_low_var == "ten_unique") {
      # n unique answer categories per id per item
      unique_counts <- raw_data %>%
        group_by(id) %>%
-       summarise(across(all_of(setdiff(feature_names, daily_feature_names)), ~ n_distinct(.)), .groups = "drop")
+       summarise(across(all_of(beep_feature_names), ~ n_distinct(.)), .groups = "drop")
      
      # keep only ids with count ≥ 10 in every item/feature 
      ids_to_keep <- unique_counts %>%
@@ -109,7 +107,7 @@ if (def_low_var == "ten_unique") {
      } else if (def_low_var == "one") {
      var_features <- raw_data %>%
        group_by(id) %>%
-       summarise(across(all_of(setdiff(feature_names, daily_feature_names)), ~ sd(., na.rm = T)), groups = "drop") 
+       summarise(across(all_of(beep_feature_names), ~ sd(., na.rm = T)), groups = "drop") 
        
      ids_var <- var_features %>%
        filter(if_all(everything(), ~ . >= 1)) %>%
@@ -126,52 +124,52 @@ if (def_low_var == "ten_unique") {
 
 
 
-# --- MISSINGNESS (Number of Rows) ---------------------------------------------------------------------------------
+# --- MISSINGNESS (Number of Rows) NOT NECESSARY IN THIS DATASET SINCE IT HAS ALREADY BEEN PREPROCESSED---------------------------------------------------------------------------------
 # pivot longer
 raw_data_long = raw_data %>%
   pivot_longer( cols = all_of(feature_names), names_to = "item", values_to = "value")
 
 # compute n missing rows per ID  
-raw_data_long_missing_rows <- raw_data %>%
-  mutate(
-    row_missing = if_else(
-      if_all(setdiff(beep_feature_names, "beep"), is.na), TRUE, FALSE
-    )
-  )
-missing_rows_per_id <- raw_data_long_missing_rows %>%
-  group_by(id) %>%
-  summarise(
-    n_missing_rows = sum(row_missing),
-    .groups = "drop"
-  )
+ raw_data_long_missing_rows <- raw_data %>%
+   mutate(
+     row_missing = if_else(
+       if_all(setdiff(beep_feature_names, "beep"), is.na), TRUE, FALSE
+     )
+   )
+ missing_rows_per_id <- raw_data_long_missing_rows %>%
+   group_by(id) %>%
+   summarise(
+     n_missing_rows = sum(row_missing),
+     .groups = "drop"
+   )
 
-# Remove ids with too many missing rows (based on 2*std more than the mean of missing rows per id)
-cutoff <- mean(missing_rows_per_id$n_missing_rows) +
-  2 * sd(missing_rows_per_id$n_missing_rows)
+# # Remove ids with too many missing rows (based on 2*std more than the mean of missing rows per id)
+# cutoff <- mean(missing_rows_per_id$n_missing_rows) +
+#   2 * sd(missing_rows_per_id$n_missing_rows)
+# 
+# 
+# # plot distribution of max missing rows and cut off value
+# ggplot(missing_rows_per_id, aes(x = n_missing_rows)) +
+#   geom_bar() +
+#   geom_vline(xintercept = cutoff, color = "red", linewidth = 1) +
+#   labs(
+#     x = "Number of Missing Rows (per ID)",
+#     y = "Count of Participants",
+#     title = "Distribution of Missing Rows per ID"
+#   ) +
+#   theme_minimal()
 
-
-# plot distribution of max missing rows and cut off value
-ggplot(missing_rows_per_id, aes(x = n_missing_rows)) +
-  geom_bar() +
-  geom_vline(xintercept = cutoff, color = "red", linewidth = 1) +
-  labs(
-    x = "Number of Missing Rows (per ID)",
-    y = "Count of Participants",
-    title = "Distribution of Missing Rows per ID"
-  ) +
-  theme_minimal()
-
-valid_ids <- missing_rows_per_id %>%
-  filter(n_missing_rows <= cutoff) %>%
-  pull(id)
-
-raw_data_long <- raw_data_long %>%
-  filter(id %in% valid_ids)
-
-raw_data <- raw_data %>%
-  filter(id %in% valid_ids)
-
-n_id_3_missings = length(unique(raw_data$id)) # excludes 6 participants
+# valid_ids <- missing_rows_per_id %>%
+#   filter(n_missing_rows <= cutoff) %>%
+#   pull(id)
+# 
+# raw_data_long <- raw_data_long %>%
+#   filter(id %in% valid_ids)
+# 
+# raw_data <- raw_data %>%
+#   filter(id %in% valid_ids)
+# 
+# n_id_3_missings = length(unique(raw_data$id)) # excludes 6 participants
 
 
 
@@ -211,7 +209,7 @@ raw_data_long <- raw_data_long %>%
 raw_data <- raw_data %>%
   filter(id %in% valid_ids_consec)
 
-n_id_4_cons_missings = length(unique(raw_data_long$id)) # excludes 1 participant
+n_id_4_cons_missings = length(unique(raw_data_long$id)) # excludes 2 participants
 
 
 
@@ -237,7 +235,8 @@ ids_with_nas <- raw_data_long %>%
 
 raw_data_long <-  raw_data_long %>% filter(!(id %in% ids_with_nas))
 raw_data <- raw_data %>% filter(!(id %in% ids_with_nas))
-n_id_5_test_na = length(unique(raw_data_long$id)) # removes 61 participants
+n_id_5_test_na = length(unique(raw_data_long$id)) # removes 66 participants
+
 
 # Check for IDs with missings in val data (important for HPO)
 ids_with_nas_val <- raw_data_long %>%
@@ -253,7 +252,6 @@ raw_data_long <- raw_data_long %>%
 n_id_6_val_na = length(unique(raw_data_long$id)) # removes 15 participants
 
 
-
 # ---------------------Define Target Item and Relevant Cols-------------------------------------------------
 id_col <- "id"
 time_col <- "counter"
@@ -262,6 +260,17 @@ target_item <-"positive_physical_health_behavior" #"depressed"
 
 
 # ---------------------Descriptive statistics---------------------------------------------------------------
+# Average time series length before interpolation 
+ts_length <- raw_data %>%
+  dplyr::group_by(id) %>%
+  dplyr::summarise(
+    n_timepoints = sum(!is.na(.data[[target_item]])),
+    .groups = "drop"
+  )
+n_surveys <- sum(ts_length$n_timepoints)
+mean_ts_length <- mean(ts_length$n_timepoints)
+sd_ts_length <- sd(ts_length$n_timepoints)
+range_ts_length <- range(ts_length$n_timepoints)
 # Range of answer categories (all items have the same possible answer categories 0-100)
 range_answer_cat =  raw_data %>%
   dplyr::select(all_of(feature_names)) %>%
@@ -1397,32 +1406,56 @@ for (i in seq(1, 4, 1)) {
     theme_minimal())
   
   
-  preds_i_with_res <- preds_i %>%
-    mutate(resid = y_test - median_preds)
-  
-  print(ggplot(preds_i_with_res, aes(x = median_preds, y = resid)) +
-          geom_point(aes(color = abs(resid)),
-                     alpha = 0.45, size = 2) +
-          geom_smooth(method = "loess", se = FALSE, color = "#2c3e50", linewidth = 1.1) +
-          geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.7) +
-          scale_color_gradient(low = "#74add1", high = "#d73027",
-                               name = "|Residual|") +
-          labs(
-            x = "Predicted",
-            y = "Residual (Observed – Predicted)",
-            title = paste("Residual Plot for", name_i)
-          ) +
-          theme_minimal(base_size = 14) +
-          theme(
-            plot.title = element_text(face = "bold"),
-            legend.position = "right",
-            panel.grid.minor = element_blank()
-          ) +
-          coord_cartesian(ylim = c(-70, 70)) + #Use coord_cartesian instead of ylim
-          guides(color = guide_colorbar(barwidth = 1, barheight = 14)))  # Extend color bar height
+  # Residual Plots 
+  for (example_id in c(72425, 73479, 72291)) {
+    
+    preds_i_with_res <- preds_i %>% # hab ich schon definiert, hier eig doppelter code
+      dplyr::filter(id == example_id) %>%
+      dplyr::mutate(resid = y_test - median_preds)
+    
+    print(
+      ggplot(preds_i_with_res, aes(x = median_preds, y = resid)) +
+        geom_point(
+          aes(color = abs(resid)),
+          alpha = 0.45,
+          size = 2
+        ) +
+        geom_smooth(
+          method = "loess",
+          se = FALSE,
+          color = "#2c3e50",
+          linewidth = 1.1
+        ) +
+        geom_hline(
+          yintercept = 0,
+          linetype = "dashed",
+          color = "black",
+          linewidth = 0.7
+        ) +
+        scale_color_gradient(
+          low = "#74add1",
+          high = "#d73027",
+          name = "|Residual|"
+        ) +
+        labs(
+          x = "Predicted",
+          y = "Residual (Observed – Predicted)",
+          title = paste("Residual Plot — ID", example_id) # TODO: paste name model
+        ) +
+        theme_minimal(base_size = 14) +
+        theme(
+          plot.title = element_text(face = "bold"),
+          legend.position = "right",
+          panel.grid.minor = element_blank()
+        ) +
+        coord_cartesian(ylim = c(-70, 70)) +
+        guides(color = guide_colorbar(barwidth = 1, barheight = 14))
+    )
+  }
 }
 
-
+# TODO: In diskussion beschreiben dass zusammenhang zwischen features und target nicht richtig geschätzt wurde bei den personen die nicht funktioneirne
+# ABER: auch mit random forests nicht und diese nehemen keinen linearen zusammenhang an! residual plots in trainingsset anschauen 
 
 ##################################################################################################################
 ##################################################################################################################

@@ -552,8 +552,7 @@ compute_metrics <- function(y_obs, y_pred,
   mae_val  <- mean(abs(y_obs - y_pred), na.rm = TRUE)
   rmse_val <- sqrt(mean((y_obs - y_pred)^2, na.rm = TRUE))
   mse_val  <- mean((y_obs - y_pred)^2, na.rm = TRUE)
-  smape_val <- mean(2 * abs(y_pred - y_obs) /
-                      (abs(y_obs) + abs(y_pred)), na.rm = TRUE)
+  smape_val <-smape(y_obs, y_pred) 
   
   
   # if no PI, return only point forecast evaluation 
