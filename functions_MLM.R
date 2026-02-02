@@ -614,13 +614,9 @@ resid_bootstrap <- function(
     X_train, y_train, X_test, # X_train and X_test neet to be matrices, y_train needs to be a numerical vecotr
     alpha, lambda, # otpimized alpha and lambda
     B = 500,
-    seed = 47,
-    standardize = FALSE
+    standardize = FALSE,
+    id, target_item, std_stats, trend_parameter, counters
 ) {
-
-    
-    set.seed(seed)
-    
     #Fit with fixed lambda
     fit0 <- glmnet(
       x = X_train,
@@ -651,7 +647,10 @@ resid_bootstrap <- function(
         standardize = standardize
       )
       
-      mu_boot[, b] <- as.vector(predict(fit_b, newx = X_test, s = lambda))
+      preds_b <- as.vector(predict(fit_b, newx = X_test, s = lambda))
+      preds_b <- undo_transformations(preds_b, id, target_item, std_stats, trend_parameter, counters)
+      
+      mu_boot[, b] <- preds_b
     }
     
     # Return bootstrap distribution + summary
@@ -689,5 +688,52 @@ statistic_forecast <- function(
   # Undo detrending/differencing (same as original)
   preds <- undo_diff_and_detrend_single(preds, test_counters, transformation, params)
   return(preds)  # numeric vector length = nrow(X_test)X_test    = X_test,
+}
+
+
+
+sensitivity_analysis <- function(y_pred, y_test, test_counter, id_i, n_lags_i) {
+  errors_df <- tibble(
+    id = id_i,
+    counter = test_counters,
+    y_true = as.numeric(y_test),
+    y_pred = as.numeric(y_pred),
+  ) %>%
+    mutate(
+      zone = if_else(row_number() <= n_lags_i, "leakage_zone", "clean_zone") # TODO: leakage eig nur in zone n_lags-1? NEIN, passt, siehe IPAD
+    )
+  
+  # Fehler (RMSE) pro Zone
+  zone_metrics <- errors_df %>%
+    group_by(id, zone) %>%
+    summarise(
+      RMSE = sqrt(mean((y_true - y_pred)^2, na.rm = TRUE)),
+      .groups = "drop"
+    )
+  
+  return(zone_metrics)
+}
+
+
+undo_transformations <- function(preds, id_i, target_item, std_stats, trend_parameter, counters, is_matrix=FALSE) {
+  # Undo standardization
+  mean_value <- (std_stats %>% filter(id == id_i, item == target_item))$mean_value
+  sd_value <- (std_stats %>% filter(id == id_i, item == target_item))$sd_value
+  preds <- preds * sd_value + mean_value
+  
+  # Undo detrending/differencing
+  transformation <- trend_parameter %>%
+    filter(id == id_i, item == target_item) %>%
+    pull(transformation)
+  params <- trend_parameter %>%
+    filter(id == id_i, item == target_item) %>%
+    pull(params)
+  if (is_matrix){
+    preds <- undo_diff_and_detrend_matrix(preds, counters, transformation, params)
+  } else {
+    preds <- undo_diff_and_detrend_single(preds, counters, transformation, params)
+  }
+  
+  return(preds)
 }
 
