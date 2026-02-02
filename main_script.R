@@ -12,7 +12,7 @@ lapply(packages, function(x) {
   }
   library(x, character.only = TRUE)
 })
-source("functions_MLM.R")
+source("git-ordner/Uncertainty-Quantification-in-ESM-Time-Series-Forecast/functions_MLM.R")
 
 create_renv <- FALSE
 if (create_renv) {
@@ -555,7 +555,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
                 ))
               
               # Sensitivitätsanalyse
-              sensitivity_results_i <- sensitivity_analysis(y_pred, y_test, test_counter, id_i, n_lags_i)
+              sensitivity_results_i <- sensitivity_analysis(preds, y_test, test_counter, id_i, n_lags_i)
               sensitivity_results <- bind_rows(sensitivity_results, sensitivity_results_i)
 }
 
@@ -1114,9 +1114,10 @@ opt_hpo_RFR %>%
     .
   )
 
-################################### Predictions for RFR #####################################
+################################### Predictions for RFR ########################################################################
 # Fit random forest regression and predict target_item per id
 test_metrics_RFR <- tibble() 
+train_metrics_RFR <- tibble()
 test_predictions_RFR <- tibble()
 sensitivity_results_RFR <- tibble()
 for (id_i in unique(df_hpo$id)) {
@@ -1142,6 +1143,7 @@ for (id_i in unique(df_hpo$id)) {
   y_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(target_item))
   X_test <- as.matrix(df_eval_i %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
   y_test <- as.matrix(y_test_raw %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(value))
+  y_train_raw_i <- as.matrix(y_train_raw %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(value))
   
   set.seed(random_seed)
   
@@ -1155,15 +1157,18 @@ for (id_i in unique(df_hpo$id)) {
   
   #  Predict point est. + PI 
   median_preds <- predict(qrf_fit, X_test, what = 0.5)
+  median_preds_train <- predict(qrf_fit, X_train, what = 0.5)
   pred_lower   <- predict(qrf_fit, X_test, what = 0.025)
   pred_upper   <- predict(qrf_fit, X_test, what = 0.975)
   
   # Undo Transformations
   median_preds <- undo_transformations(median_preds, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
+  median_preds_train <- undo_transformations(median_preds_train, id_i, target_item, std_stats_eval, trend_parameter_eval, train_val_counters)
   pred_lower <- undo_transformations(pred_lower, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
   pred_upper <- undo_transformations(pred_upper, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
   
-  #  Evaluate 
+  
+  #  Evaluate (test metrics)
   test_metrics_i <- compute_metrics(
     y_obs      = y_test,
     y_pred     = median_preds,
@@ -1179,6 +1184,13 @@ for (id_i in unique(df_hpo$id)) {
     )
   
   test_metrics_RFR <- bind_rows(test_metrics_RFR, test_metrics_i)
+  
+  # Evaluate (train metrics)
+  
+  train_metrics_i <- compute_metrics(median_preds_train, y_train_raw_i)
+  train_metrics_i <- train_metrics_i %>% mutate(id = id_i)
+  train_metrics_RFR <- bind_rows(train_metrics_RFR, train_metrics_i)
+  
   
   # Save test predictions for plotting
   test_predictions_RFR <- bind_rows(test_predictions_RFR, tibble(
@@ -1426,7 +1438,7 @@ for (i in seq(1, 4, 1)) {
 
 
 #----------------------------------------------------------------------------------------------------
-
+#TODO: Alle modelle einfügen
 # tabelle accuracy und UQ
 tab <- tibble(
   Modell = c("AR(1)","RLR (Bootstrap)", "RFR" ),
