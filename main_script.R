@@ -1,10 +1,9 @@
 ############################################### Initialization ##########################################################
 # Initialize renv, load functions and set seed for reproducability
-citation("quantregForest")
 # TODO: Ask: Mean or Median Prediction for Bootstrapping/Random Forests?
 
 # Install and load required packages
-packages <- c("dplyr", "tidyr", "zoo", "purrr", "Metrics", "ggplot2", "glmnet", "coin",
+packages <- c("dplyr", "tidyr", "zoo", "imputeTS", "purrr", "Metrics", "ggplot2", "glmnet", "coin",
               "openesm", "quantregForest", "kableExtra", "xtable", "boot")
 lapply(packages, function(x) {
   if (!require(x, character.only = TRUE)) {
@@ -36,7 +35,6 @@ if (load_from_file) {
 } else {
   raw_data = openesm::get_dataset("0008_westhoff")$data
 }
-
 
 ############################################# Preprocessing #############################################################
 # Check initial number of ids
@@ -255,8 +253,8 @@ n_id_6_val_na = length(unique(raw_data_long$id)) # removes 15 participants
 # ---------------------Define Target Item and Relevant Cols-------------------------------------------------
 id_col <- "id"
 time_col <- "counter"
-target_item <-"positive_physical_health_behavior" #"depressed"
-
+target_item <-"positive_physical_health_behavior"
+# target_item <- "depressed"
 
 
 # ---------------------Descriptive statistics---------------------------------------------------------------
@@ -301,13 +299,53 @@ for (id_i in unique(raw_data_long$id)) {
 
 ACF_plot(raw_data_long, chosen_item = target_item)
 
-
+citation("imputeTS")
 
 
 #################################### Prepare Data for HPO ##########################################
 # Interpolate
-interpolation_type = "spline"
+interpolation_type = "Kalman"
 data_long_hpo <- interpolate(raw_data_long, train_counters, interpolation_type)
+
+
+# Plot imputed values for example IDS
+
+example_id <- c(72425, 73479, 72291)
+
+
+for (id_i in example_id) {
+  
+  # raw with NAs
+  df_raw <- raw_data_long %>%
+    dplyr::filter(id == id_i, item == target_item) %>%
+    dplyr::select(counter, value_raw = value) %>%
+    dplyr::arrange(counter)
+  
+  # imputed
+  df_imp <- data_long_hpo %>%
+    dplyr::filter(id == id_i, item == target_item) %>%
+    dplyr::select(counter, value_imp = value) %>%
+    dplyr::arrange(counter)
+  
+  # align by counter 
+  df_plot <- dplyr::left_join(df_raw, df_imp, by = "counter") %>%
+    dplyr::arrange(counter)
+  
+  if (any(is.na(df_plot$value_raw))) {
+    print(
+      ggplot_na_imputations(
+        x_with_na = df_plot$value_raw,
+        x_with_imputations = df_plot$value_imp,
+        title = paste("ID", id_i, target_item),
+        xlab = "Counter",
+        ylab = "Value"
+      )
+    )
+  } else {
+    message("ID ", id_i, ": no missing values in raw series for this item.")
+  }
+}
+
 
 # Check if there are any NAs left
 sum(is.na(data_long_hpo %>% filter(counter %in% train_counters)))
@@ -346,7 +384,8 @@ mean(data_long_hpo_dd_std %>% filter(id == unique(data_long_hpo_dd_std$id)[1], i
 
 ################################### Prepare Data for Eval ###########################################
 # Interpolate
-data_long_eval <- interpolate(raw_data_long, train_val_counters, interpolation_type)
+# data_long_eval <- interpolate(raw_data_long, train_val_counters, interpolation_type)
+data_long_eval <- data_long_hpo
 
 # Check if there are any NAs left
 sum(is.na(data_long_eval %>% filter(counter %in% train_val_counters)))
@@ -480,11 +519,11 @@ print(apa_tab, include.rownames = FALSE, sanitize.text.function = identity, comm
 ################################################# Linear Forecast #######################################################
 
 # Fit glm and predict target_item per id
-test_metrics <- tibble() # for accuracy metrics
-train_metrics <- tibble()
+test_metrics <- tibble() # for out of sample accuracy metrics
+train_metrics <- tibble() # for in sample accuracy metrics
 glm_results <- tibble()
 all_predictions <- tibble()
-sensitivity_results <- tibble()  # für Sensitivitätsanalyse (Leakage vs Clean Zone)
+sensitivity_results <- tibble()  
 for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without hpo because of missings in validation set 
               # Get optimal HPs per id
               alpha_i <- (opt_hps %>% filter(id == id_i))$alpha

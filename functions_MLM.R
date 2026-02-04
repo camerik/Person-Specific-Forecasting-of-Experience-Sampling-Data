@@ -8,6 +8,8 @@ ACF_plot <- function(data, chosen_item, max_lag = 10) {
     ggplot2::facet_wrap(~ id)
 }
 
+
+
 interpolate <- function(df, counters,
                         interpolation_type = "spline",
                         min_value = 0, max_value = 100) {
@@ -19,7 +21,7 @@ interpolate <- function(df, counters,
       dplyr::mutate(
         value = if (any(counter %in% counters)) {
           v <- value
-          trainsplit <- counter %in% counters # makes sure that na.spline only uses data from training split
+          trainsplit <- counter %in% counters  # only use training (or specified) split
           v[trainsplit] <- zoo::na.approx(
             v[trainsplit],
             x = counter[trainsplit],
@@ -32,14 +34,16 @@ interpolate <- function(df, counters,
         value = pmin(pmax(value, min_value), max_value)  # clip to original scale
       ) %>%
       dplyr::ungroup()
+    
   } else if (interpolation_type == "spline") {
-     df_inter <- df %>%
+    
+    df_inter <- df %>%
       dplyr::group_by(id, item) %>%
       dplyr::mutate(
         value = if (any(counter %in% counters)) {
           v <- value
           trainsplit <- counter %in% counters
-          v[trainsplit] <- zoo::na.spline( # makes sure that na.spline only uses data from training split
+          v[trainsplit] <- zoo::na.spline(  # only use training (or specified) split
             v[trainsplit],
             x = counter[trainsplit]
           )
@@ -47,19 +51,39 @@ interpolate <- function(df, counters,
         } else {
           value
         },
-        value = pmin(pmax(value, min_value), max_value)  # clip to original scale
+        value = pmin(pmax(value, min_value), max_value)
+      ) %>%
+      dplyr::ungroup()
+    
+  } else if (interpolation_type == "Kalman") {
+    
+    df_inter <- df %>%
+      dplyr::group_by(id, item) %>%
+      dplyr::mutate(
+        value = if (any(counter %in% counters)) {
+          v <- value
+          trainsplit <- counter %in% counters
+          v[trainsplit] <- imputeTS::na_kalman(
+            v[trainsplit]
+          )
+          v
+        } else {
+          value
+        },
+        value = pmin(pmax(value, min_value), max_value)
       ) %>%
       dplyr::ungroup()
     
   } else {
     stop("Interpolation type not implemented!")
   }
+  
   return(df_inter)
 }
 
 
 
-
+# ----- Unit root test by Ryan et al., 2025------------------------------------------------------------
 adf_flow <- function(x,
                      alpha = 0.05, 
                      diffX = FALSE, 
@@ -332,7 +356,7 @@ adf_translate <- function(ur, model){
   return(ph)
 }
 
-
+#----------------------------------------------------------------------------------------------------
 
 # check which trend
 diagnose_trend_type <- function(data) {
@@ -342,7 +366,7 @@ diagnose_trend_type <- function(data) {
       df <- .x  # grouped data (without id/item)
       
       # Run ADF test safely
-      adf_out <- tryCatch(adf_flow(df$value, alpha = 0.01, modSel = "pval"), error = function(e) NULL)
+      adf_out <- tryCatch(adf_flow(df$value, alpha = 0.05, modSel = "pval"), error = function(e) NULL)
       
       # Translate trend label
       trend_label <- if (!is.null(adf_out)) adf_translate(adf_out$ur, adf_out$model) else NA_character_
@@ -362,7 +386,7 @@ diagnose_trend_type <- function(data) {
       } else if (transformation == "detrend_linear") {
         params$model <- lm(value ~ as.numeric(counter), data = df)
       } else if (transformation == "detrend_quadratic") {
-        params$model <- lm(value ~ as.numeric(counter), data = df)
+        params$model <- lm(value ~ as.numeric(counter), data = df) # detrend linearly even if a quadratic trend was detected
       }
       
       tibble(
@@ -401,6 +425,7 @@ diff_and_detrend <- function(data, trans_info) {
     dplyr::select(-transformation, -params)
   return(transformed_data)
 }
+#-----------------------------------------------------------------------------------------------------
 
 # Backtransform to original scale
 #undo_diff_and_detrend <- function(data, trans_info) {
@@ -607,7 +632,7 @@ compute_metrics <- function(y_obs, y_pred,
   ))
 }
 
-# bootstrap using resampled residuals for Elastic Net Regression (see Hyndman & Athanasopolous)
+# bootstrap using resampled residuals for Elastic Net Regression (as described in Efron, 1979)
 
 resid_bootstrap <- function(
     X_train, y_train, X_test, # X_train and X_test neet to be matrices, y_train needs to be a numerical vecotr
@@ -616,7 +641,7 @@ resid_bootstrap <- function(
     standardize = FALSE,
     id, target_item, std_stats, trend_parameter, counters
 ) {
-    #Fit with fixed lambda
+    # Fit ENR
     fit0 <- glmnet(
       x = X_train,
       y = y_train,
@@ -625,16 +650,24 @@ resid_bootstrap <- function(
       standardize = standardize
     )
     
-    # compute residual for each forecast step 
+    # compute residual e for each forecast step 
     yhat_train <- as.vector(predict(fit0, newx = X_train, s = lambda))
     e <- y_train - yhat_train
     
-    # Bootstrap refit predictions
+    # center residuals
+    e <- e - mean(e, na.rm = TRUE)
+    
+    # point forecast on test set + invert transformations
+    mu_point <- as.vector(predict(fit0, newx = X_test, s = lambda))
+    mu_point <- undo_transformations(mu_point, id, target_item, std_stats, trend_parameter, counters)
+    
+    
+    # Create new bootstrap data by adding the resampled residuals to the fitted model fit0 and 
+    # fit hte model with the new data B times
     n_test <- nrow(X_test)
     mu_boot <- matrix(NA_real_, nrow = n_test, ncol = B)
     
     for (b in seq_len(B)) {
-      # residual bootstrap
       e_star <- sample(e, size = length(e), replace = TRUE)
       y_star <- yhat_train + e_star
       
@@ -655,8 +688,8 @@ resid_bootstrap <- function(
     # Return bootstrap distribution + summary
     list(
       fit0 = fit0,
-      mu_point = as.vector(predict(fit0, newx = X_test, s = lambda)),
-      mu_boot = mu_boot
+      mu_point = mu_point,
+       mu_boot = mu_boot
     )
   }
 
