@@ -523,6 +523,7 @@ test_metrics <- tibble() # for out of sample accuracy metrics
 train_metrics <- tibble() # for in sample accuracy metrics
 glm_results <- tibble()
 all_predictions <- tibble()
+train_predictions <- tibble()
 sensitivity_results <- tibble()  
 for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without hpo because of missings in validation set 
               # Get optimal HPs per id
@@ -545,6 +546,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               X_test <- as.matrix(df_eval_i %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
               y_test <- as.matrix(y_test_raw %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(value))
               y_train_raw_i <- as.matrix(y_train_raw %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(value))
+              y_train_raw_i <- y_train_raw_i[(n_lags_i + 1):length(y_train_raw_i)]
               
               set.seed(random_seed)
               
@@ -566,8 +568,9 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               # Undo transformations
               preds <- undo_transformations(preds, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
               preds_train <- undo_transformations(preds_train, id_i, target_item, std_stats_eval, trend_parameter_eval, train_val_counters)
-
-              # Store preds for residual plots
+              preds_train <- na.omit(preds_train) # remove NAs arised in n_lag first preds
+              
+              # Store preds for residual plots - Test set
               pred_store_i <- tibble(
                 id = id_i,
                 counter = test_counters,
@@ -578,6 +581,19 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
               all_predictions <- bind_rows(
                 all_predictions,
                 pred_store_i
+              )
+              
+              # Store preds for residual plots - Train set
+              train_pred_store_i <- tibble(
+                id = id_i,
+                counter = train_val_counters[(n_lags_i + 1):length(train_val_counters)],
+                y_obs = as.numeric(y_train_raw_i),
+                y_pred = as.numeric(preds_train)
+              )
+              
+              train_predictions <- bind_rows(
+                train_predictions,
+                train_pred_store_i
               )
               
              
@@ -1027,7 +1043,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, cause df_eval includes ids with miss
 
 
 #########################################################################################################################
-# Random Forest Regression (RFR) with lagged features and bootstrapping for uncertainty estimation
+# Quantile Random Forest Regression (RFR) with lagged features and bootstrapping for uncertainty estimation
 #########################################################################################################################
 
 ############################## HP-Optimization #############################################
@@ -1167,6 +1183,7 @@ opt_hpo_RFR %>%
 test_metrics_RFR <- tibble() 
 train_metrics_RFR <- tibble()
 test_predictions_RFR <- tibble()
+train_predictions_RFR <- tibble()
 sensitivity_results_RFR <- tibble()
 for (id_i in unique(df_hpo$id)) {
   # Get optimal hyperparameters per id 
@@ -1192,6 +1209,7 @@ for (id_i in unique(df_hpo$id)) {
   X_test <- as.matrix(df_eval_i %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
   y_test <- as.matrix(y_test_raw %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(value))
   y_train_raw_i <- as.matrix(y_train_raw %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(value))
+  y_train_raw_i <- y_train_raw_i[(n_lags_i + 1):length(y_train_raw_i)]
   
   set.seed(random_seed)
   
@@ -1205,17 +1223,19 @@ for (id_i in unique(df_hpo$id)) {
   
   #  Predict point est. + PI 
   median_preds <- predict(qrf_fit, X_test, what = 0.5)
-  median_preds_train <- predict(qrf_fit, X_train, what = 0.5)
+  preds_train <- predict(qrf_fit, X_train, what = 0.5) # changed name so it matches preds_train of AR(1) and ENR model (for residual plots) 
   pred_lower   <- predict(qrf_fit, X_test, what = 0.025)
   pred_upper   <- predict(qrf_fit, X_test, what = 0.975)
   
+  
   # Undo Transformations
   median_preds <- undo_transformations(median_preds, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
-  median_preds_train <- undo_transformations(median_preds_train, id_i, target_item, std_stats_eval, trend_parameter_eval, train_val_counters)
+  preds_train <- undo_transformations(preds_train, id_i, target_item, std_stats_eval, trend_parameter_eval, train_val_counters)
   pred_lower <- undo_transformations(pred_lower, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
   pred_upper <- undo_transformations(pred_upper, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
   
-  
+ 
+  preds_train <- na.omit(preds_train) # remove NAs arised in n_lag first preds
   #  Evaluate (test metrics)
   test_metrics_i <- compute_metrics(
     y_obs      = y_test,
@@ -1235,18 +1255,27 @@ for (id_i in unique(df_hpo$id)) {
   
   # Evaluate (train metrics)
   
-  train_metrics_i <- compute_metrics(median_preds_train, y_train_raw_i)
+  train_metrics_i <- compute_metrics(preds_train, y_train_raw_i)
   train_metrics_i <- train_metrics_i %>% mutate(id = id_i)
   train_metrics_RFR <- bind_rows(train_metrics_RFR, train_metrics_i)
   
   
   # Save test predictions for plotting
   test_predictions_RFR <- bind_rows(test_predictions_RFR, tibble(
+    id=id_i,
+    counter = test_counters,
     median_preds=median_preds,
     y_test=y_test,
     pred_lower=pred_lower,
-    pred_upper=pred_upper,
+    pred_upper=pred_upper
+  ))
+  
+  # Save train predictions for plotting
+  train_predictions_RFR <- bind_rows(train_predictions_RFR, tibble(
     id=id_i,
+    counter = train_val_counters[(n_lags_i + 1):length(train_val_counters)],
+    y_obs_train = y_train_raw_i,
+    y_pred_train = preds_train
   ))
   
   sensitivity_results_i <- sensitivity_analysis(median_preds, y_test, test_counter, id_i, n_lags_i)
@@ -1345,6 +1374,81 @@ uq_comparison_table %>%
 
 
 
+############################# Residual Plots ##################################################################
+############Residual Plots - Model Fits #######################################################################
+
+metrics_train <- list(train_metrics, train_metrics_RFR)
+predictions_train <- list(train_predictions, train_predictions_RFR)
+names_train <- c("ENR", "QuantRegForests")
+# Loop for plots for different bootstrap variations
+for (i in seq(1, 2, 1)) {
+  name_i <- names_train[[i]]
+  metrics_i <- metrics_train[[i]]
+  preds_i <- predictions_train[[i]]
+  
+  for (example_id in c(72425, 73479, 72291)) {
+    # Extract training + test predictions for this ID
+    y_obs <- (data_long_eval %>% filter(id == example_id, counter %in% train_val_counters, item == target_item))$value
+    y_pred <- (preds_i %>% filter(id == example_id))$preds_train
+    n_train <- length(y_train)
+    
+    # Historical data frame
+    df_hist <- data.frame(
+      time = 1:n_train,
+      true = y_train,
+      type = "Historical"
+    )
+  
+  # Residual Plots - Training Set
+  for (example_id in c(72425, 73479, 72291)) {
+    
+    preds_i_with_res <- preds_i %>% # hab ich schon definiert, hier eig doppelter code
+      dplyr::filter(id == example_id) %>%
+      dplyr::mutate(resid = y_obs - y_preds)
+    
+    print(
+      ggplot(preds_i_with_res, aes(x = y_pred, y = resid)) +
+        geom_point(
+          aes(color = abs(resid)),
+          alpha = 0.45,
+          size = 2
+        ) +
+        geom_smooth(
+          method = "loess",
+          se = FALSE,
+          color = "#2c3e50",
+          linewidth = 1.1
+        ) +
+        geom_hline(
+          yintercept = 0,
+          linetype = "dashed",
+          color = "black",
+          linewidth = 0.7
+        ) +
+        scale_color_gradient(
+          low = "#74add1",
+          high = "#d73027",
+          name = "|Residual|"
+        ) +
+        labs(
+          x = "Predicted",
+          y = "Residual (Observed – Predicted)",
+          title = paste("Residual Plot — ID", example_id) # TODO: paste name model
+        ) +
+        theme_minimal(base_size = 14) +
+        theme(
+          plot.title = element_text(face = "bold"),
+          legend.position = "right",
+          panel.grid.minor = element_blank()
+        ) +
+        coord_cartesian(ylim = c(-70, 70)) +
+        guides(color = guide_colorbar(barwidth = 1, barheight = 14))
+      )
+    }
+  }
+}
+
+############################# Residual Plots Forecasting ######################################################
 metrics <- list(test_metrics_boot, test_metrics_resid_boot, test_metrics_block_boot, test_metrics_RFR)
 predictions <- list(test_predictions_boot, test_predictions_resid_boot, test_predictions_block_boot, test_predictions_RFR)
 names <- c("Standard Bootstrap", "Residual Sampling Bootstrap", "Block Bootstrap", "QuantRegForests")
