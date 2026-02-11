@@ -11,7 +11,7 @@ lapply(packages, function(x) {
   }
   library(x, character.only = TRUE)
 })
-source("git-ordner/Uncertainty-Quantification-in-ESM-Time-Series-Forecast/functions_MLM.R")
+source("git-ordner/Person-Specific-Forecasting-of-Experience-Sampling-Data/functions_MLM.R")
 
 create_renv <- FALSE
 if (create_renv) {
@@ -87,34 +87,34 @@ features_to_lag = setdiff(colnames(raw_data), c("id", "counter", "sin_weekday", 
 # Cutoff: variance < 1 or ≥ 10 unique answer categories
 def_low_var <- "one"
 if (def_low_var == "ten_unique") {
-     # n unique answer categories per id per item
-     unique_counts <- raw_data %>%
-       group_by(id) %>%
-       summarise(across(all_of(beep_feature_names), ~ n_distinct(.)), .groups = "drop")
-     
-     # keep only ids with count ≥ 10 in every item/feature 
-     ids_to_keep <- unique_counts %>%
-       filter(if_all(everything(), ~ . >= 10)) %>% # is already grouped by id, so i can use every column because column counter has > 10 unique categories per id
-       pull(id)
-     
-     raw_data <- raw_data %>% filter(id %in% ids_to_keep)
-     
-     # check: how many ids were excluded? 
-     n_id_2_var_check = length(unique(raw_data$id)) # excludes 38 participants
-     
-     } else if (def_low_var == "one") {
-     var_features <- raw_data %>%
-       group_by(id) %>%
-       summarise(across(all_of(beep_feature_names), ~ sd(., na.rm = T)), groups = "drop") 
-       
-     ids_var <- var_features %>%
-       filter(if_all(everything(), ~ . >= 1)) %>%
-       pull(id)
-     
-     raw_data <- raw_data %>%
-       filter(id %in% ids_var)
-     
-     n_id_2_var_check <- length(unique(raw_data$id)) # excludes 9 participants
+  # n unique answer categories per id per item
+  unique_counts <- raw_data %>%
+    group_by(id) %>%
+    summarise(across(all_of(beep_feature_names), ~ n_distinct(.)), .groups = "drop")
+  
+  # keep only ids with count ≥ 10 in every item/feature 
+  ids_to_keep <- unique_counts %>%
+    filter(if_all(everything(), ~ . >= 10)) %>% # is already grouped by id, so i can use every column because column counter has > 10 unique categories per id
+    pull(id)
+  
+  raw_data <- raw_data %>% filter(id %in% ids_to_keep)
+  
+  # check: how many ids were excluded? 
+  n_id_2_var_check = length(unique(raw_data$id)) # excludes 38 participants
+  
+} else if (def_low_var == "one") {
+  var_features <- raw_data %>%
+    group_by(id) %>%
+    summarise(across(all_of(beep_feature_names), ~ sd(., na.rm = T)), groups = "drop") 
+  
+  ids_var <- var_features %>%
+    filter(if_all(everything(), ~ . >= 1)) %>%
+    pull(id)
+  
+  raw_data <- raw_data %>%
+    filter(id %in% ids_var)
+  
+  n_id_2_var_check <- length(unique(raw_data$id)) # excludes 9 participants
 } else {
   print("cutoff not implemented")
 }
@@ -128,18 +128,18 @@ raw_data_long = raw_data %>%
   pivot_longer( cols = all_of(feature_names), names_to = "item", values_to = "value")
 
 # compute n missing rows per ID  
- raw_data_long_missing_rows <- raw_data %>%
-   mutate(
-     row_missing = if_else(
-       if_all(setdiff(beep_feature_names, "beep"), is.na), TRUE, FALSE
-     )
-   )
- missing_rows_per_id <- raw_data_long_missing_rows %>%
-   group_by(id) %>%
-   summarise(
-     n_missing_rows = sum(row_missing),
-     .groups = "drop"
-   )
+raw_data_long_missing_rows <- raw_data %>%
+  mutate(
+    row_missing = if_else(
+      if_all(setdiff(beep_feature_names, "beep"), is.na), TRUE, FALSE
+    )
+  )
+missing_rows_per_id <- raw_data_long_missing_rows %>%
+  group_by(id) %>%
+  summarise(
+    n_missing_rows = sum(row_missing),
+    .groups = "drop"
+  )
 
 # # Remove ids with too many missing rows (based on 2*std more than the mean of missing rows per id)
 # cutoff <- mean(missing_rows_per_id$n_missing_rows) +
@@ -287,20 +287,17 @@ data_statistics <- raw_data_long %>%
 # Plot 4 example features
 for (id_i in unique(raw_data_long$id)) {
   print(raw_data_long %>%
-    dplyr::filter(id == id_i) %>%
-    dplyr::filter(item %in% feature_names[13:16]) %>%
-    ggplot(aes(x = value)) +
-    ggtitle(paste("ID:",id_i)) +
-    geom_histogram(bins = 20, na.rm = TRUE) +
-    facet_wrap(~ item) +
-    theme_classic())
+          dplyr::filter(id == id_i) %>%
+          dplyr::filter(item %in% feature_names[13:16]) %>%
+          ggplot(aes(x = value)) +
+          ggtitle(paste("ID:",id_i)) +
+          geom_histogram(bins = 20, na.rm = TRUE) +
+          facet_wrap(~ item) +
+          theme_classic())
 }
 
 
 ACF_plot(raw_data_long, chosen_item = target_item)
-
-citation("imputeTS")
-
 
 #################################### Prepare Data for HPO ##########################################
 # Interpolate
@@ -449,49 +446,49 @@ for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
   )
   
   for (alpha_i in seq(0, 1, 0.5)) { # Optimize regularization ( 0 = ridge, 1 = lasso, 0 < alpha < 1 = elastic net)
-      # Fit glm and predict targets per id
-      for (id_i in unique(df_hpo_i$id)) {
-        X_train <- as.matrix(df_hpo_i %>% filter(counter %in% train_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-        y_train <- as.matrix(df_hpo_i %>% filter(counter %in% train_counters, id == id_i) %>% dplyr::select(target_item, -id))
-        X_test <- as.matrix(df_hpo_i %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-        y_test <- as.vector(as.matrix(y_test_raw %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(value)))
-        
-        set.seed(random_seed)
-        
-        # lambda opt
-        glm_fit <- glmnet(
-          X_train, y_train,
-          alpha = alpha_i,
-          standardize = FALSE,
-        )
-        
-        preds_hpo <- predict(glm_fit, newx = X_test) # Shape ( one row = all lambdas for one time point, one column = one time series (lambda-specific))
-        
-        # do NOT use cv.glmnet --> does not take into account that preds are time series
-        # • “lambda.min”: the λ at which the smallest MSE is achieved. (with CV)
-        # • “lambda.1se”: the largest λ at which the MSE is within one standard error of the smallest MSE (default).
-        
-        # Undo transformations
-        preds_hpo <- undo_transformations(preds_hpo, id_i, target_item, std_stats_hpo, trend_parameter_hpo, val_counters, is_matrix=TRUE)
-        
-        # Find best lambda depending on min rmse
-        rmse_preds_hpo = sqrt(colMeans((y_test - preds_hpo)^2))
-        best_lambda_index = which.min(rmse_preds_hpo)
-        best_lambda_i = glm_fit$lambda[best_lambda_index]
-        preds_hpo_i = as.vector(preds_hpo[,best_lambda_index])
-        
-        # compute accuracy metrics
-        val_metrics_i <- compute_metrics(preds_hpo, y_test) # TODO: außerhalb der schleife überprüfen ob code richtig läuft
-        val_metrics_i <- val_metrics_i %>% mutate(id = id_i, 
-                                                  n_lags=n_lags_i,
-                                                  alpha=alpha_i,
-                                                 lambda = best_lambda_i)
-        val_metrics <- bind_rows(val_metrics, val_metrics_i)
-        
-        print(sprintf("ID: %.0f   N_Lags: %.0f   Alpha: %.1f   Lambda: %.3f   RMSE: %.3f", id_i, n_lags_i, alpha_i, best_lambda_i, val_metrics_i$RMSE))
-      }
+    # Fit glm and predict targets per id
+    for (id_i in unique(df_hpo_i$id)) {
+      X_train <- as.matrix(df_hpo_i %>% filter(counter %in% train_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+      y_train <- as.matrix(df_hpo_i %>% filter(counter %in% train_counters, id == id_i) %>% dplyr::select(target_item, -id))
+      X_test <- as.matrix(df_hpo_i %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+      y_test <- as.vector(as.matrix(y_test_raw %>% filter(counter %in% val_counters, id == id_i) %>% dplyr::select(value)))
+      
+      set.seed(random_seed)
+      
+      # lambda opt
+      glm_fit <- glmnet(
+        X_train, y_train,
+        alpha = alpha_i,
+        standardize = FALSE,
+      )
+      
+      preds_hpo <- predict(glm_fit, newx = X_test) # Shape ( one row = all lambdas for one time point, one column = one time series (lambda-specific))
+      
+      # do NOT use cv.glmnet --> does not take into account that preds are time series
+      # • “lambda.min”: the λ at which the smallest MSE is achieved. (with CV)
+      # • “lambda.1se”: the largest λ at which the MSE is within one standard error of the smallest MSE (default).
+      
+      # Undo transformations
+      preds_hpo <- undo_transformations(preds_hpo, id_i, target_item, std_stats_hpo, trend_parameter_hpo, val_counters, is_matrix=TRUE)
+      
+      # Find best lambda depending on min rmse
+      rmse_preds_hpo = sqrt(colMeans((y_test - preds_hpo)^2))
+      best_lambda_index = which.min(rmse_preds_hpo)
+      best_lambda_i = glm_fit$lambda[best_lambda_index]
+      preds_hpo_i = as.vector(preds_hpo[,best_lambda_index])
+      
+      # compute accuracy metrics
+      val_metrics_i <- compute_metrics(preds_hpo, y_test) # TODO: außerhalb der schleife überprüfen ob code richtig läuft
+      val_metrics_i <- val_metrics_i %>% mutate(id = id_i, 
+                                                n_lags=n_lags_i,
+                                                alpha=alpha_i,
+                                                lambda = best_lambda_i)
+      val_metrics <- bind_rows(val_metrics, val_metrics_i)
+      
+      print(sprintf("ID: %.0f   N_Lags: %.0f   Alpha: %.1f   Lambda: %.3f   RMSE: %.3f", id_i, n_lags_i, alpha_i, best_lambda_i, val_metrics_i$RMSE))
     }
   }
+}
 
 
 # Save hps per id which maximize accuracy
@@ -506,12 +503,12 @@ opt_hps <- val_metrics %>%
 
 # Format numeric columns APA-style and print table ready for latex document
 opt_hps_apa <- opt_hps %>%
- mutate(
-   RMSE  = round(RMSE, 3),
-   sMAPE = round(sMAPE, 3),
-   MAE   = round(MAE, 3),
-  lambda = formatC(lambda, format = "f", digits = 2)
-)
+  mutate(
+    RMSE  = round(RMSE, 3),
+    sMAPE = round(sMAPE, 3),
+    MAE   = round(MAE, 3),
+    lambda = formatC(lambda, format = "f", digits = 2)
+  )
 apa_tab <- xtable(opt_hps_apa,caption="Optimal Hyperparameters per Participant", label="tab:opt_hps")
 print(apa_tab, include.rownames = FALSE, sanitize.text.function = identity, comment = FALSE)
 
@@ -526,104 +523,104 @@ all_predictions <- tibble()
 train_predictions <- tibble()
 sensitivity_results <- tibble()  
 for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without hpo because of missings in validation set 
-              # Get optimal HPs per id
-              alpha_i <- (opt_hps %>% filter(id == id_i))$alpha
-              n_lags_i <- (opt_hps %>% filter(id == id_i))$n_lags
-              lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
-              
-              # create wide format dataset with lagged features
-              df_eval_i <- create_lag_features( # own function to create lagged df 
-                df=df_eval, 
-                id_col=id_col, 
-                time_col=time_col, 
-                target_col=target_item, 
-                n_lags=n_lags_i,
-                numeric_features=features_to_lag
-              )
-              
-              X_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-              y_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(target_item))
-              X_test <- as.matrix(df_eval_i %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-              y_test <- as.matrix(y_test_raw %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(value))
-              y_train_raw_i <- as.matrix(y_train_raw %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(value))
-              y_train_raw_i <- y_train_raw_i[(n_lags_i + 1):length(y_train_raw_i)]
-              
-              set.seed(random_seed)
-              
-              glm_fit_i <- glmnet(X_train, y_train, alpha = alpha_i, lambda = lambda_i, standardize = FALSE) #data is already z-transformed
-
-              # save number of non zero coefficients and coefficients
-              glm_summary <- capture.output(print(glm_fit_i)) %>% paste(collapse = "\n")
-              
-              # Extract coefficients
-              coef_df <- as.data.frame(as.matrix(coef(glm_fit_i)))
-              colnames(coef_df) <- "estimate"
-              coef_df$term <- rownames(coef_df)
-              rownames(coef_df) <- NULL
-              
-              # Save predictions
-              preds <- as.vector(predict(glm_fit_i, newx = X_test, s = lambda_i))
-              preds_train <- as.vector(predict(glm_fit_i, newx = X_train, s = lambda_i))
-              
-              # Undo transformations
-              preds <- undo_transformations(preds, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
-              preds_train <- undo_transformations(preds_train, id_i, target_item, std_stats_eval, trend_parameter_eval, train_val_counters)
-              preds_train <- na.omit(preds_train) # remove NAs arised in n_lag first preds
-              
-              # Store preds for residual plots - Test set
-              pred_store_i <- tibble(
-                id = id_i,
-                counter = test_counters,
-                y_true = as.numeric(y_test),
-                y_pred = as.numeric(preds)
-              )
-              
-              all_predictions <- bind_rows(
-                all_predictions,
-                pred_store_i
-              )
-              
-              # Store preds for residual plots - Train set
-              train_pred_store_i <- tibble(
-                id = id_i,
-                counter = train_val_counters[(n_lags_i + 1):length(train_val_counters)],
-                y_obs = as.numeric(y_train_raw_i),
-                y_pred = as.numeric(preds_train)
-              )
-              
-              train_predictions <- bind_rows(
-                train_predictions,
-                train_pred_store_i
-              )
-              
-             
-              test_metrics_i <- compute_metrics(preds, y_test) # accuracy metrics per id
-              test_metrics_i <- test_metrics_i %>% mutate(id = id_i, n_lags=n_lags_i, alpha=alpha_i, lambda = lambda_i) # add optimized HPO
-              test_metrics <- bind_rows(test_metrics, test_metrics_i) # accuracy metrics matrix (all ids)
-              #n_coef <- bind_rows(n_coef, n_nonzero_coef_i)
-              #coefficients <- bind_rows(coefficients, coefficients_i)
-              
-              train_metrics_i <- compute_metrics(preds_train, y_train_raw_i)
-              train_metrics_i <- train_metrics_i %>% mutate(id = id_i)
-              train_metrics <- bind_rows(train_metrics, train_metrics_i)
-              
-              glm_results <- bind_rows(
-                glm_results,
-                tibble(
-                  id = id_i,
-                  alpha = alpha_i,
-                  n_lags = n_lags_i,
-                  lambda=lambda_i,
-                  glm_summary = glm_summary,
-                  coef_table = list(coef_df)   
-                ))
-              
-              # Sensitivitätsanalyse
-              sensitivity_results_i <- sensitivity_analysis(preds, y_test, test_counter, id_i, n_lags_i)
-              sensitivity_results <- bind_rows(sensitivity_results, sensitivity_results_i)
+  # Get optimal HPs per id
+  alpha_i <- (opt_hps %>% filter(id == id_i))$alpha
+  n_lags_i <- (opt_hps %>% filter(id == id_i))$n_lags
+  lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
+  
+  # create wide format dataset with lagged features
+  df_eval_i <- create_lag_features( # own function to create lagged df 
+    df=df_eval, 
+    id_col=id_col, 
+    time_col=time_col, 
+    target_col=target_item, 
+    n_lags=n_lags_i,
+    numeric_features=features_to_lag
+  )
+  
+  X_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+  y_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(target_item))
+  X_test <- as.matrix(df_eval_i %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+  y_test <- as.matrix(y_test_raw %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(value))
+  y_train_raw_i <- as.matrix(y_train_raw %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(value))
+  y_train_raw_i <- y_train_raw_i[(n_lags_i + 1):length(y_train_raw_i)]
+  
+  set.seed(random_seed)
+  
+  glm_fit_i <- glmnet(X_train, y_train, alpha = alpha_i, lambda = lambda_i, standardize = FALSE) #data is already z-transformed
+  
+  # save number of non zero coefficients and coefficients
+  glm_summary <- capture.output(print(glm_fit_i)) %>% paste(collapse = "\n")
+  
+  # Extract coefficients
+  coef_df <- as.data.frame(as.matrix(coef(glm_fit_i)))
+  colnames(coef_df) <- "estimate"
+  coef_df$term <- rownames(coef_df)
+  rownames(coef_df) <- NULL
+  
+  # Save predictions
+  preds <- as.vector(predict(glm_fit_i, newx = X_test, s = lambda_i))
+  preds_train <- as.vector(predict(glm_fit_i, newx = X_train, s = lambda_i))
+  
+  # Undo transformations
+  preds <- undo_transformations(preds, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
+  preds_train <- undo_transformations(preds_train, id_i, target_item, std_stats_eval, trend_parameter_eval, train_val_counters)
+  preds_train <- na.omit(preds_train) # remove NAs arised in n_lag first preds
+  
+  # Store preds for residual plots - Test set
+  pred_store_i <- tibble(
+    id = id_i,
+    counter = test_counters,
+    y_true = as.numeric(y_test),
+    y_pred = as.numeric(preds)
+  )
+  
+  all_predictions <- bind_rows(
+    all_predictions,
+    pred_store_i
+  )
+  
+  # Store preds for residual plots - Train set
+  train_pred_store_i <- tibble(
+    id = id_i,
+    counter = train_val_counters[(n_lags_i + 1):length(train_val_counters)],
+    y_obs_train = as.numeric(y_train_raw_i),
+    y_pred_train = as.numeric(preds_train)
+  )
+  
+  train_predictions <- bind_rows(
+    train_predictions,
+    train_pred_store_i
+  )
+  
+  
+  test_metrics_i <- compute_metrics(preds, y_test) # accuracy metrics per id
+  test_metrics_i <- test_metrics_i %>% mutate(id = id_i, n_lags=n_lags_i, alpha=alpha_i, lambda = lambda_i) # add optimized HPO
+  test_metrics <- bind_rows(test_metrics, test_metrics_i) # accuracy metrics matrix (all ids)
+  #n_coef <- bind_rows(n_coef, n_nonzero_coef_i)
+  #coefficients <- bind_rows(coefficients, coefficients_i)
+  
+  train_metrics_i <- compute_metrics(preds_train, y_train_raw_i)
+  train_metrics_i <- train_metrics_i %>% mutate(id = id_i)
+  train_metrics <- bind_rows(train_metrics, train_metrics_i)
+  
+  glm_results <- bind_rows(
+    glm_results,
+    tibble(
+      id = id_i,
+      alpha = alpha_i,
+      n_lags = n_lags_i,
+      lambda=lambda_i,
+      glm_summary = glm_summary,
+      coef_table = list(coef_df)   
+    ))
+  
+  # Sensitivitätsanalyse
+  sensitivity_results_i <- sensitivity_analysis(preds, y_test, test_counter, id_i, n_lags_i)
+  sensitivity_results <- bind_rows(sensitivity_results, sensitivity_results_i)
 }
 
-# -------- Qualitative Analysis of Prediction Performance ---------------------------
+# -------- Analysis of Potential Overfitting  ---------------------------
 
 # Compute variance in target item per id
 target_variance <- y_test_raw %>%
@@ -642,7 +639,7 @@ combined_metrics <- train_metrics %>%
     target_variance,  # add variance column
     by = "id"
   ) %>%
-  rename(Target_Std = SD)
+  rename(Outcome_SD = SD)
 
 # Sort ascending by Target_Std to see relationship to Test_RMSE
 combined_metrics <- combined_metrics %>%
@@ -652,7 +649,7 @@ combined_metrics <- combined_metrics %>%
 # Convert from wide to long format for plotting
 long_metrics <- combined_metrics %>%
   pivot_longer(
-    cols = c(RMSE_Train, RMSE_Test, Target_Std),
+    cols = c(RMSE_Train, RMSE_Test, Outcome_SD),
     names_to = "Metric",
     values_to = "Value"
   )
@@ -660,20 +657,20 @@ long_metrics <- combined_metrics %>%
 # Plot side-by-side bar plot
 ggplot(long_metrics, aes(x = factor(id), y = Value, fill = Metric)) +
   geom_bar(stat = "identity", position = "dodge") +
-  labs(title = "RMSE and Target Variance per ID",
+  labs(title = "RMSE and SD in Outcome item per ID",
        x = "ID", y = "Value") +
-  scale_fill_manual(values = c("RMSE_Train" = "blue",
-                               "RMSE_Test"  = "red",
-                               "Target_Std" = "green")) +
+  scale_fill_manual(values = c("RMSE_Train" = "dodgerblue3",
+                               "RMSE_Test"  = "indianred1",
+                               "Outcome_SD" = "seagreen3")) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 # Simple correlation between Target_Std and Test RMSE
-correlation <- cor(combined_metrics$Target_Std, combined_metrics$RMSE_Test, use = "complete.obs")
+correlation <- cor(combined_metrics$Outcome_SD, combined_metrics$RMSE_Test, use = "complete.obs")
 correlation
 
 # Respective Plot
-ggplot(combined_metrics, aes(x = Target_Std, y = RMSE_Test)) +
+ggplot(combined_metrics, aes(x = Outcome_SD, y = RMSE_Test)) +
   geom_point(color = "red", size = 3) +           # scatter points
   geom_smooth(method = "lm", se = TRUE, color = "blue") +  # regression line with 95% CI
   labs(title = "Correlation between Target Std and Test RMSE",
@@ -726,22 +723,19 @@ all_predictions %>%
 #--------------------------------------------------------------------------------------------
 # Sensitivity Analysis
 sensitivity_results <- sensitivity_results %>%
-             mutate(zone = factor(zone,
-             levels = c("leakage_zone", "clean_zone"),
-             labels = c("leakage", "clean")
-              ),
-             id = as.factor(id))
+  mutate(zone = factor(zone,
+                       levels = c("leakage_zone", "clean_zone"),
+                       labels = c("leakage", "clean")
+  ),
+  id = as.factor(id))
 
 
-# Auswertung Sensitivitätsanalyse
-# RMSE pro id pro zone 
+#------------------ Sensitivity Analysis: Results --------------------------------------------------
+# RMSE per ID per zone
 sensitivity_wide <- sensitivity_results %>%
-  pivot_wider(names_from = zone, values_from = RMSE)
+  pivot_wider(names_from = zone, values_from = RMSE) 
 
-# Signifikanztest: Leakage-Effekt vorhanden? n = 20 --> non-parametrischer Test (Permutationstest)
-
-# Visualisierung
-
+# Plot
 ggplot(sensitivity_results, aes(x = zone, y = RMSE, fill = zone)) +
   geom_boxplot(alpha = 0.6) +
   labs(
@@ -752,22 +746,9 @@ ggplot(sensitivity_results, aes(x = zone, y = RMSE, fill = zone)) +
   theme_minimal()
 
 
-# Wide-Format:
-sensitivity_wide <- sensitivity_results %>%
-  select(id, zone, RMSE) %>%
-  pivot_wider(names_from = zone, values_from = RMSE)
-
-# observed mean difference
-obs_diff <- mean(sensitivity_wide$leakage- sensitivity_wide$clean, na.rm = TRUE)
-cat("Observed mean difference (leak - clean):", round(obs_diff, 4), "\n")
-
-#obs_diff_2 <- mean((sensitivity_results %>% filter(zone == "leakage"))$RMSE - (sensitivity_results %>% filter(zone == "clean"))$RMSE)
-#obs_diff_2
-
-# TODO: Ask if Permutationtest is valid in this scenario?
-# bei HPO tlw. ids mit n_lag = 1 --> RMSE in leakage zone basiert auf einer differenz, während für 
-# die gleiche id der RMSE der clean zone auf 14 Differenzen beruht.
-
+# Observed mean difference
+obs_diff <- mean(sensitivity_wide$leakage - sensitivity_wide$clean, na.rm = TRUE)
+cat("Observed mean difference (leakage - clean):", round(obs_diff, 4), "\n")
 
 perm_test <- symmetry_test(
   RMSE ~ zone | id,      # paired by id
@@ -834,7 +815,7 @@ for (id_i in unique(df_eval$id)) { #df_hpo, cause df_eval includes ids with miss
     # Predict on test set using a set lambda
     preds <- predict(glm_fit_boot_i, newx = X_test, s = lambda_i)
     preds <- undo_transformations(preds, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
-
+    
     all_preds[i, ] <- as.vector(preds) # rows = n_bootstrap durchläufe, columns = n_counter in test set
   }
   
@@ -870,70 +851,70 @@ for (id_i in unique(df_eval$id)) { #df_hpo, cause df_eval includes ids with miss
 test_metrics_resid_boot <- tibble() #accuracy metrics
 test_predictions_resid_boot <- tibble() # mean_preds, median_preds, y_test, PI, and PI eval 
 for (id_i in unique(df_hpo$id)) { #df_hpo, cause df_eval includes ids with missings in validation set --> no HPO possible
-    # Get optimal HPs per id
-    alpha_i <- (opt_hps %>% filter(id == id_i))$alpha
-    n_lags_i <- (opt_hps %>% filter(id == id_i))$n_lags
-    lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
-
-    df_eval_i <- create_lag_features( #create lagged dataset
-      df=df_eval, 
-      id_col=id_col, 
-      time_col=time_col, 
-      target_col=target_item, 
-      n_lags=n_lags_i,
-      numeric_features=features_to_lag
-    )
-    
-    # Split lagged dataset
-    X_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-    y_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(target_item))
-    X_test <- as.matrix(df_eval_i %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
-    y_test <- as.matrix(y_test_raw %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(value))
-    
-    set.seed(random_seed)
-    
-    # Residual Bootstrapping WITH Undoing scaling and diff and detrending inside function
-    boot <- resid_bootstrap(
-      X_train = X_train,
-      y_train = y_train,
-      X_test  = X_test,
-      alpha   = alpha_i,
-      lambda  = lambda_i,
-      B       = n_bootstrap,
-      standardize = FALSE,
-      id=id_i, 
-      target_item=target_item, 
-      std_stats=std_stats_eval, 
-      trend_parameter=trend_parameter_eval, 
-      counters = test_counters
-    )
-    
-    # Bootstrap-Verteilung 
-    all_preds <- boot$mu_boot         # n_test x B
-    #mu_point <- boot$mu_point       # n_test
-    
-    mean_preds <- apply(all_preds, 1, mean)
-    median_preds <- apply(all_preds, 1, median)
-    
-    pred_lower <- apply(all_preds, 1, quantile, probs = 0.025, na.rm = TRUE)
-    pred_upper <- apply(all_preds, 1, quantile, probs = 0.975, na.rm = TRUE)
-    
-    # bootstrap mean as point forecast (or median?)
-    
-    
-    #store preds and PIs for plotting
-   test_predictions_resid_boot_i <- tibble(
-      id = id_i,
-      counter = test_counters,
-      y_test = as.numeric(y_test),
-      mean_preds = as.numeric(mean_preds),
-      median_preds = as.numeric(median_preds),
-      pred_lower = as.numeric(pred_lower),
-      pred_upper = as.numeric(pred_upper)
-    )
-    
+  # Get optimal HPs per id
+  alpha_i <- (opt_hps %>% filter(id == id_i))$alpha
+  n_lags_i <- (opt_hps %>% filter(id == id_i))$n_lags
+  lambda_i <- (opt_hps %>% filter(id == id_i))$lambda
+  
+  df_eval_i <- create_lag_features( #create lagged dataset
+    df=df_eval, 
+    id_col=id_col, 
+    time_col=time_col, 
+    target_col=target_item, 
+    n_lags=n_lags_i,
+    numeric_features=features_to_lag
+  )
+  
+  # Split lagged dataset
+  X_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+  y_train <- as.matrix(df_eval_i %>% filter(counter %in% train_val_counters, id == id_i) %>% dplyr::select(target_item))
+  X_test <- as.matrix(df_eval_i %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(-target_item, -id, -counter))
+  y_test <- as.matrix(y_test_raw %>% filter(counter %in% test_counters, id == id_i) %>% dplyr::select(value))
+  
+  set.seed(random_seed)
+  
+  # Residual Bootstrapping WITH Undoing scaling and diff and detrending inside function
+  boot <- resid_bootstrap(
+    X_train = X_train,
+    y_train = y_train,
+    X_test  = X_test,
+    alpha   = alpha_i,
+    lambda  = lambda_i,
+    B       = n_bootstrap,
+    standardize = FALSE,
+    id=id_i, 
+    target_item=target_item, 
+    std_stats=std_stats_eval, 
+    trend_parameter=trend_parameter_eval, 
+    counters = test_counters
+  )
+  
+  # Bootstrap-Verteilung 
+  all_preds <- boot$mu_boot         # n_test x B
+  #mu_point <- boot$mu_point       # n_test
+  
+  mean_preds <- apply(all_preds, 1, mean)
+  median_preds <- apply(all_preds, 1, median)
+  
+  pred_lower <- apply(all_preds, 1, quantile, probs = 0.025, na.rm = TRUE)
+  pred_upper <- apply(all_preds, 1, quantile, probs = 0.975, na.rm = TRUE)
+  
+  # bootstrap mean as point forecast (or median?)
+  
+  
+  #store preds and PIs for plotting
+  test_predictions_resid_boot_i <- tibble(
+    id = id_i,
+    counter = test_counters,
+    y_test = as.numeric(y_test),
+    mean_preds = as.numeric(mean_preds),
+    median_preds = as.numeric(median_preds),
+    pred_lower = as.numeric(pred_lower),
+    pred_upper = as.numeric(pred_upper)
+  )
+  
   test_predictions_resid_boot <- bind_rows(test_predictions_resid_boot, test_predictions_resid_boot_i)
-   
+  
   # Compute metrics
   test_metrics_resid_i <- compute_metrics(y_test, mean_preds, pred_lower, pred_upper)
   message(sprintf("ID: %d   RMSE: %.3f", id_i, test_metrics_resid_i$RMSE[1]))
@@ -1234,7 +1215,7 @@ for (id_i in unique(df_hpo$id)) {
   pred_lower <- undo_transformations(pred_lower, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
   pred_upper <- undo_transformations(pred_upper, id_i, target_item, std_stats_eval, trend_parameter_eval, test_counters)
   
- 
+  
   preds_train <- na.omit(preds_train) # remove NAs arised in n_lag first preds
   #  Evaluate (test metrics)
   test_metrics_i <- compute_metrics(
@@ -1373,10 +1354,8 @@ uq_comparison_table %>%
   column_spec(5, width = "3cm")
 
 
-
 ############################# Residual Plots ##################################################################
 ############Residual Plots - Model Fits #######################################################################
-
 metrics_train <- list(train_metrics, train_metrics_RFR)
 predictions_train <- list(train_predictions, train_predictions_RFR)
 names_train <- c("ENR", "QuantRegForests")
@@ -1388,8 +1367,8 @@ for (i in seq(1, 2, 1)) {
   
   for (example_id in c(72425, 73479, 72291)) {
     # Extract training + test predictions for this ID
-    y_obs <- (data_long_eval %>% filter(id == example_id, counter %in% train_val_counters, item == target_item))$value
-    y_pred <- (preds_i %>% filter(id == example_id))$preds_train
+    y_obs <- (preds_i %>% filter(id == example_id))$y_obs_train
+    y_pred <- (preds_i %>% filter(id == example_id))$y_pred_train
     n_train <- length(y_train)
     
     # Historical data frame
@@ -1398,51 +1377,51 @@ for (i in seq(1, 2, 1)) {
       true = y_train,
       type = "Historical"
     )
-  
-  # Residual Plots - Training Set
-  for (example_id in c(72425, 73479, 72291)) {
     
-    preds_i_with_res <- preds_i %>% # hab ich schon definiert, hier eig doppelter code
-      dplyr::filter(id == example_id) %>%
-      dplyr::mutate(resid = y_obs - y_preds)
-    
-    print(
-      ggplot(preds_i_with_res, aes(x = y_pred, y = resid)) +
-        geom_point(
-          aes(color = abs(resid)),
-          alpha = 0.45,
-          size = 2
-        ) +
-        geom_smooth(
-          method = "loess",
-          se = FALSE,
-          color = "#2c3e50",
-          linewidth = 1.1
-        ) +
-        geom_hline(
-          yintercept = 0,
-          linetype = "dashed",
-          color = "black",
-          linewidth = 0.7
-        ) +
-        scale_color_gradient(
-          low = "#74add1",
-          high = "#d73027",
-          name = "|Residual|"
-        ) +
-        labs(
-          x = "Predicted",
-          y = "Residual (Observed – Predicted)",
-          title = paste("Residual Plot — ID", example_id) # TODO: paste name model
-        ) +
-        theme_minimal(base_size = 14) +
-        theme(
-          plot.title = element_text(face = "bold"),
-          legend.position = "right",
-          panel.grid.minor = element_blank()
-        ) +
-        coord_cartesian(ylim = c(-70, 70)) +
-        guides(color = guide_colorbar(barwidth = 1, barheight = 14))
+    # Residual Plots - Training Set
+    for (example_id in c(72425, 73479, 72291)) {
+      
+      preds_i_with_res <- preds_i %>% # hab ich schon definiert, hier eig doppelter code
+        dplyr::filter(id == example_id) %>%
+        dplyr::mutate(resid = y_obs_train - y_pred_train)
+      
+      print(
+        ggplot(preds_i_with_res, aes(x = y_pred_train, y = resid)) +
+          geom_point(
+            aes(color = abs(resid)),
+            alpha = 0.45,
+            size = 2
+          ) +
+          geom_smooth(
+            method = "loess",
+            se = FALSE,
+            color = "#2c3e50",
+            linewidth = 1.1
+          ) +
+          geom_hline(
+            yintercept = 0,
+            linetype = "dashed",
+            color = "black",
+            linewidth = 0.7
+          ) +
+          scale_color_gradient(
+            low = "#74add1",
+            high = "#d73027",
+            name = "|Residual|"
+          ) +
+          labs(
+            x = "Predicted",
+            y = "Residual (Observed – Predicted)",
+            title = paste("Residual Plot — ID", example_id) # TODO: paste name model
+          ) +
+          theme_minimal(base_size = 14) +
+          theme(
+            plot.title = element_text(face = "bold"),
+            legend.position = "right",
+            panel.grid.minor = element_blank()
+          ) +
+          coord_cartesian(ylim = c(-70, 70)) +
+          guides(color = guide_colorbar(barwidth = 1, barheight = 14))
       )
     }
   }
@@ -1538,15 +1517,15 @@ for (i in seq(1, 4, 1)) {
   
   
   print(ggplot(preds_i, aes(x = y_test, y = median_preds)) +
-    geom_point(alpha = 0.5) +
-    geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
-    facet_wrap(~ id, scales = "free") +
-    labs(
-      x = "Observed",
-      y = "Predicted",
-      title = paste("Observed vs Predict per ID for", name_i)
-    ) +
-    theme_minimal())
+          geom_point(alpha = 0.5) +
+          geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+          facet_wrap(~ id, scales = "free") +
+          labs(
+            x = "Observed",
+            y = "Predicted",
+            title = paste("Observed vs Predict per ID for", name_i)
+          ) +
+          theme_minimal())
   
   
   # Residual Plots 
@@ -1775,4 +1754,5 @@ combined_wide %>%
       "Intervallbreite" = 3
     )
   ) %>%
+  kable_styling(latex_options = "hold_position")
   kable_styling(latex_options = "hold_position")
