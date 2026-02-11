@@ -9,219 +9,105 @@ lapply(packages, function(x) {
   library(x, character.only = TRUE)
 })
 
-# --- Full dataset ---
-# raw_data_long_imp_2 = spline imputed missings in train+val data
+# data_long_eval = Kalman imputed missings, mean stationary, z-scaled based on train+val
 
-ts_all <- raw_data_long_imp2 %>% 
-  filter(item == "positive_physical_health_behavior") %>% 
+df_ar <- data_long_eval_dd_std  %>% 
+  dplyr::filter(item == target_item) %>% 
   as_tsibble(key = c(id, item), index = counter)
 
-ts_train_val <- ts_all %>% 
-  filter(counter %in% train_val_counters)
-# horizon
+# Forecasting horizon
 H <- 15  
 
-# store results
-ar1_fc_all <- list()
+# Store results
+test_predictions_ar <- tibble()
+train_predictions_ar <- tibble()
+test_metrics_ar <- tibble()
 
-for (id_k in unique(df_hpo$id)) { # nur ids au df_hpo!
+# Fit AR(1) model per ID, store forecasts and PIs
+
+for (id_i in unique(df_hpo$id)) { # only ids from df_hpo!
   
-  df_id <- ts_all %>% filter(id == id_k)
-  df_train <- ts_train_val %>% filter(id == id_k)
+  df_id <- df_ar %>% 
+    dplyr::filter(id == id_i)
   
-  # test points: first 15 post-training observations
-  test_points <- df_id %>% 
-    filter(counter > max(train_val_counters)) %>% 
-    slice(1:H)
+  # train set
+  df_train <- df_ar %>%
+    dplyr::filter(counter %in% train_val_counters, id == id_i) %>%
+    dplyr::arrange(counter)
   
-  # Speicherobjekte
-  fc_mean     <- numeric(H)
-  fc_lower95  <- numeric(H)
-  fc_upper95  <- numeric(H)
+  # test set
+  df_test <- df_ar %>% 
+    dplyr::filter(counter %in% test_counters, id == id_i) %>%
+    dplyr::arrange(counter)
   
-  current_series <- df_train
-  
-  for (h in 1:H) {
-    
-    # --- (1) AR(1)-Modell ---
-    model_h <- current_series %>% 
+
+    # fit AR(1)-Model
+    fit<- df_train %>% 
       model(AR1 = ARIMA(value ~ pdq(1,0,0)))
     
-    # --- (2) Forecast + Prediction Interval ---
-    fc_h <- model_h %>%
-      forecast(h = 1, bootstrap = TRUE, times = 1000) %>%
-      hilo(level = 95)
+    # get in-sample predictions via augment 
+    train_pred_ar_i <- fit %>%
+      augment() %>%
+      transmute(
+        id = id_i,
+        counter,
+        y_pred_train = .fitted
+      ) %>%
+      mutate(
+        # back-transform fitted values (and optionally y_obs_train)
+        y_pred_train = undo_transformations(
+          y_pred_train, id_i, target_item,
+          std_stats_eval, trend_parameter_eval,
+          counter
+        ),
+        # add y_obs_train
+        y_obs_train = y_obs_train)
+
     
-    fc_h2 <- fc_h %>% unpack_hilo(`95%`)
+    train_predictions_ar <- bind_rows(train_predictions_ar, train_pred_ar_i)
     
-    # Speichern
-    fc_mean[h]    <- fc_h2$.mean
-    fc_lower95[h] <- fc_h2$`95%_lower`
-    fc_upper95[h] <- fc_h2$`95%_upper`
     
-    # --- (3) Append true value ---
-    current_series <- current_series %>% 
-      add_row(
-        counter = test_points$counter[h],
-        id      = id_k,
-        item    = "positive_physical_health_behavior",
-        value   = test_points$value[h]
-      )
-  }
+    # Forecast with fixed model parameters + Bootstrapped Prediction Interval
+    fc <- fit %>%
+      forecast(h = H, bootstrap = TRUE, times = 500) %>%
+      hilo(level = 95) %>%
+      unpack_hilo(`95%`)
+    
+    
+    mean_preds <- undo_transformations(fc$.mean, id_i, target_item, std_stats_eval, trend_parameter_eval, df_test$counter)
+    pred_lower <- undo_transformations(fc$`95%_lower`, id_i, target_item, std_stats_eval, trend_parameter_eval, df_test$counter)
+    pred_upper <- undo_transformations(fc$`95%_upper`, id_i, target_item, std_stats_eval, trend_parameter_eval, df_test$counter)
+    y_obs <- data_long_eval %>% filter(item == target_item, id == id_i, counter %in% test_counters) %>% arrange(counter) %>% pull(value)
+    y_obs_train <- data_long_eval %>% filter(item == target_item, id == id_i, counter %in% train_val_counters) %>% arrange(counter) %>% pull(value)
+  
   
   # Store results per ID
-  ar1_fc_all[[as.character(id_k)]] <- tibble(
-    id       = id_k,
-    counter  = test_points$counter,
-    true     = test_points$value,
-    forecast = fc_mean,
-    lower95  = fc_lower95,
-    upper95  = fc_upper95
+  test_predictions_ar_i <- tibble(
+    id       = id_i,
+    counter  = df_test$counter,
+    y_obs  = y_obs,
+    mean_preds     = mean_preds,
+    pred_lower  = pred_lower,
+    pred_upper  = pred_upper
   )
+  
+  # Combine all IDs
+  test_predictions_ar <- bind_rows(test_predictions_ar, test_predictions_ar_i)
+
+  
+  # Compute and store test metrics
+  test_metrics_ar_i <- compute_metrics(y_obs, mean_preds, pred_lower, pred_upper)
+  test_metrics_ar_i <- test_metrics_ar_i %>% mutate(id = id_i)
+  test_metrics_ar <- bind_rows(test_metrics_ar, test_metrics_ar_i) 
+  
 }
 
-# Combine all IDs
-ar1_benchmark_fc <- bind_rows(ar1_fc_all)
-
-
-# --- Intervallbreite + Coverage pro beep ---
-ar1_benchmark_fc <- ar1_benchmark_fc %>%
-  mutate(
-    interval_width = upper95 - lower95,
-    coverage = true >= lower95 & true <= upper95
-  )
-
-# --- Aggregierte Metriken pro ID ---
-ar1_benchmark_metrics <- ar1_benchmark_fc %>%
-  group_by(id) %>%
-  summarise(
-    RMSE = sqrt(mean((forecast - true)^2)),
-    Coverage = mean(coverage, na.rm = TRUE),
-    interval_width = mean(interval_width)
-  )
-
-
-ar1_benchmark_metrics %>%
-  kable(
-    format = "latex",
-    booktabs = TRUE,
-    escape = FALSE,
-    col.names = c(
-      "ID",
-      "RMSE",
-      "Coverage",
-      "Interval width"
-    )
-  ) %>%
-  kable_styling(
-    latex_options = c("hold_position"),
-    font_size = 10
-  )
-
-
-#plot
-
-hist_plot_df <- ts_train_val %>%
-  select(id, counter, value) %>%
-  rename(y = value)
-
-test_plot_df <- ts_all %>%
-  filter(counter > max(train_val_counters)) %>%
-  group_by(id) %>%
-  slice(1:H) %>%
-  ungroup() %>%
-  select(id, counter, value) %>%
-  rename(y = value)
-
-
-
-for (example_id in unique(ar1_benchmark_fc$id)[6:10]) {
-  
-  df_hist <- hist_plot_df %>% filter(id == example_id)
-  df_test <- test_plot_df %>% filter(id == example_id)
-  df_fc   <- ar1_benchmark_fc %>% filter(id == example_id)
-  
-  print(
-    ggplot() +
-      
-      # --- 95% Prediction Interval ---
-      geom_ribbon(
-        data = df_fc,
-        aes(
-          x = counter,
-          ymin = lower95,
-          ymax = upper95,
-          fill = "95% Prediction Interval"  
-        ),
-        alpha = 0.2
-      ) +
-      
-      # --- Forecast mean ---
-      geom_line(
-        data = df_fc,
-        aes(
-          x = counter,
-          y = forecast,
-          color = "Mean forecast"
-        ),
-        linewidth = 1
-      ) +
-      
-      # --- Test true values ---
-      geom_point(
-        data = df_test,
-        aes(
-          x = counter,
-          y = y,
-          color = "Observed values"
-        )
-      ) +
-      
-      geom_line(
-        data = df_test,
-        aes(
-          x = counter,
-          y = y,
-          color = "Observed values"
-        ),
-        linetype = "dashed"
-      ) +
-      
-      # --- Historical values ---
-      geom_line(
-        data = df_hist,
-        aes(
-          x = counter,
-          y = y,
-          color = "Historical data"
-        ),
-        linewidth = 1
-      ) +
-      
-      scale_color_manual(values = c(
-        "Mean forecast"   = "blue",
-        "Observed values"       = "black",
-        "Historical data" = "grey40"
-      )) +
-      scale_fill_manual(values = c(
-        "95% Prediction Interval" = "red"
-      )) +
-      labs(
-        title = paste("AR(1) — ID", example_id),
-        x = "Time",
-        y = "positive physical health behavior",
-        color = ""
-      ) +
-      
-      theme_minimal()
-  )
-}
 
 
 #---------------------------------------------------------------------------------------
 ### residual plot AR(1)
 #----------------------------------------------------------------------------------------
-ggplot(ar1_benchmark_fc, aes(x = true, y = forecast)) +
+ggplot(test_predictions_ar, aes(x = y_obs, y = mean_preds)) +
   geom_point(alpha = 0.5) +
   geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
   facet_wrap(~ id, scales = "free") +
@@ -233,14 +119,14 @@ ggplot(ar1_benchmark_fc, aes(x = true, y = forecast)) +
   theme_minimal()
 
 
-ar1_benchmark_fc <- ar1_benchmark_fc %>%
-  mutate(resid = true - forecast)
+test_predictions_ar <- test_predictions_ar %>%
+  mutate(resid = y_obs - mean_preds)
 
-ggplot(ar1_benchmark_fc, aes(x = true, y = resid)) +
+ggplot(test_predictions_ar, aes(x = mean_preds, y = resid)) +
   geom_point(alpha = 0.4) +
   geom_hline(yintercept = 0, linetype = "dashed") +
   labs(
-    x = "Observed",
+    x = "Predicted",
     y = "Residual (Observed – Predicted)",
     title = "Residual Plot AR(1)"
   ) +
@@ -249,7 +135,7 @@ ggplot(ar1_benchmark_fc, aes(x = true, y = resid)) +
 
 
 
-ggplot(ar1_benchmark_fc, aes(x = true, y = resid)) +
+ggplot(test_predictions_ar, aes(x = mean_preds, y = resid)) +
   
   # Punktwolke
   geom_point(aes(color = abs(resid)),
@@ -265,10 +151,9 @@ ggplot(ar1_benchmark_fc, aes(x = true, y = resid)) +
                        name = "|Residual|") +
   
   labs(
-    x = "Observed value",
+    x = "Predicted",
     y = "Residual (Observed – Predicted)",
-    title = "Residual Plot AR(1)",
-    subtitle = "Systematic over- and underestimation"
+    title = "OOS Residual Plot AR(1)",
   ) +
   
   theme_minimal(base_size = 14) +

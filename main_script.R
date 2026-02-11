@@ -1427,7 +1427,7 @@ for (i in seq(1, 2, 1)) {
   }
 }
 
-############################# Residual Plots Forecasting ######################################################
+#############################  Forecasting with Historical Data + Test Set Residual Plots ######################################################
 metrics <- list(test_metrics_boot, test_metrics_resid_boot, test_metrics_block_boot, test_metrics_RFR)
 predictions <- list(test_predictions_boot, test_predictions_resid_boot, test_predictions_block_boot, test_predictions_RFR)
 names <- c("Standard Bootstrap", "Residual Sampling Bootstrap", "Block Bootstrap", "QuantRegForests")
@@ -1562,7 +1562,7 @@ for (i in seq(1, 4, 1)) {
         labs(
           x = "Predicted",
           y = "Residual (Observed – Predicted)",
-          title = paste("Residual Plot — ID", example_id) # TODO: paste name model
+          title = paste("OOS Residual Plot — ID", example_id) # TODO: paste name model
         ) +
         theme_minimal(base_size = 14) +
         theme(
@@ -1646,7 +1646,7 @@ kable(tab, format = "latex", booktabs = TRUE, digits = 3)
 # ---------------- results per id ----------------------
 # --- specify model name 
 
-# --- 1. RLR Bootstrap aggregieren ---
+# aggregate RLR Bootstrap aggregieren 
 df_RLRB <- test_metrics_boot %>%
   group_by(id) %>%
   summarise(
@@ -1656,7 +1656,7 @@ df_RLRB <- test_metrics_boot %>%
   ) %>%
   mutate(Model = "RLRB")
 
-# --- 2. RFR aggregieren ---
+# aggregate RFR 
 df_RFR <- test_metrics_RFR %>%
   group_by(id) %>%
   summarise(
@@ -1666,18 +1666,18 @@ df_RFR <- test_metrics_RFR %>%
   ) %>%
   mutate(Model = "RFR")
 
-# --- 3. Zusammenführen ---
+# bind
 df_all <- bind_rows(df_RLRB, df_RFR)
 
 
-# --- 3. Breit pivotieren: eine Zeile pro ID, Spalten = Modell ---
+# pivot wider  one row per  ID, Spalten = Modell
 df_wide <- df_all %>%
   pivot_wider(
     names_from = Model,
     values_from = c(RMSE, Coverage, interval_width)
   )
 
-# --- 4. Werte kombinieren: "Bootstrap / RFR" ---
+# combine Bootstrap / RFR
 results_combined <- df_wide %>%
   mutate(
     RMSE = paste0(round(RMSE_RLRB, 3), " / ", round(RMSE_RFR, 3)),
