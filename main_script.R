@@ -66,12 +66,11 @@ raw_data <- raw_data %>%
 raw_data <- raw_data %>%
   group_by(id, day) %>%                      
   mutate(across(
-    all_of(c("sleep_quality")),# nur auffüllen, wenn es mind. einen observed Wert gibt
-    # denselben Wert auf alle beeps des Tages verteilen
+    all_of(c("sleep_quality")),
     ~ if (any(!is.na(.x))) {
       rep(first(na.omit(.x)), length(.x))
     } else {
-      .x # sonst NA lassen (wird probleme geben bei interpolation, PRO TAG interpolieren)
+      .x 
     }
   )) %>%
   ungroup()
@@ -122,59 +121,6 @@ if (def_low_var == "ten_unique") {
   print("cutoff not implemented")
 }
 
-
-
-
-# --- MISSINGNESS (Number of Rows) NOT NECESSARY IN THIS DATASET SINCE IT HAS ALREADY BEEN PREPROCESSED---------------------------------------------------------------------------------
-# pivot longer
-raw_data_long = raw_data %>%
-  pivot_longer( cols = all_of(feature_names), names_to = "item", values_to = "value")
-
-# compute n missing rows per ID  
-raw_data_long_missing_rows <- raw_data %>%
-  mutate(
-    row_missing = if_else(
-      if_all(setdiff(beep_feature_names, "beep"), is.na), TRUE, FALSE
-    )
-  )
-missing_rows_per_id <- raw_data_long_missing_rows %>%
-  group_by(id) %>%
-  summarise(
-    n_missing_rows = sum(row_missing),
-    .groups = "drop"
-  )
-
-# # Remove ids with too many missing rows (based on 2*std more than the mean of missing rows per id)
-# cutoff <- mean(missing_rows_per_id$n_missing_rows) +
-#   2 * sd(missing_rows_per_id$n_missing_rows)
-# 
-# 
-# # plot distribution of max missing rows and cut off value
-# ggplot(missing_rows_per_id, aes(x = n_missing_rows)) +
-#   geom_bar() +
-#   geom_vline(xintercept = cutoff, color = "red", linewidth = 1) +
-#   labs(
-#     x = "Number of Missing Rows (per ID)",
-#     y = "Count of Participants",
-#     title = "Distribution of Missing Rows per ID"
-#   ) +
-#   theme_minimal()
-
-# valid_ids <- missing_rows_per_id %>%
-#   filter(n_missing_rows <= cutoff) %>%
-#   pull(id)
-# 
-# raw_data_long <- raw_data_long %>%
-#   filter(id %in% valid_ids)
-# 
-# raw_data <- raw_data %>%
-#   filter(id %in% valid_ids)
-# 
-# n_id_3_missings = length(unique(raw_data$id)) # excludes 6 participants
-
-
-
-
 # --- MISSINGNESS (Consecutive Rows) ---------------------------------------------------------------------------------
 # Compute consecutive missing rows per id and exclude ids with more than 5 consecutive missing rows (one whole day)
 cutoff_cons_miss = 5
@@ -210,10 +156,7 @@ raw_data_long <- raw_data_long %>%
 raw_data <- raw_data %>%
   filter(id %in% valid_ids_consec)
 
-n_id_4_cons_missings = length(unique(raw_data_long$id)) # excludes 2 participants
-
-
-
+n_id_3_cons_missings = length(unique(raw_data_long$id)) # excludes 2 participants
 
 # ------------------------Holdout Splits ---------------------------------------------------------------------------------
 # Split dataset into Train, Validation (for HPO) and Test-Dataset while considering temporal order
@@ -236,7 +179,7 @@ ids_with_nas <- raw_data_long %>%
 
 raw_data_long <-  raw_data_long %>% filter(!(id %in% ids_with_nas))
 raw_data <- raw_data %>% filter(!(id %in% ids_with_nas))
-n_id_5_test_na = length(unique(raw_data_long$id)) # removes 66 participants
+n_id_4_test_na = length(unique(raw_data_long$id)) # removes 66 participants
 
 
 # Check for IDs with missings in val data (important for HPO)
@@ -250,7 +193,7 @@ ids_with_nas_val <- raw_data_long %>%
 # Remove IDs with missings in val data
 raw_data_long <- raw_data_long %>%
   filter (!( id %in% ids_with_nas_val))
-n_id_6_val_na = length(unique(raw_data_long$id)) # removes 15 participants
+n_id_5_val_na = length(unique(raw_data_long$id)) # removes 15 participants
 
 
 # ---------------------Define Target Item and Relevant Cols-------------------------------------------------
@@ -273,7 +216,7 @@ sd_ts_length <- sd(ts_length$n_timepoints)
 range_ts_length <- range(ts_length$n_timepoints)
 # Range of answer categories (all items have the same possible answer categories 0-100)
 range_answer_cat =  raw_data %>%
-  dplyr::select(all_of(feature_names)) %>%
+  dplyr::select(all_of(features_to_lag)) %>%
   unlist() %>%
   range(na.rm = TRUE)
 
@@ -286,11 +229,11 @@ data_statistics <- raw_data_long %>%
     .groups = "drop"
   )
 
-# Plot 4 example features
+# Plot
 for (id_i in unique(raw_data_long$id)) {
   print(raw_data_long %>%
           dplyr::filter(id == id_i) %>%
-          dplyr::filter(item %in% feature_names[13:16]) %>%
+          dplyr::filter(item %in% features_to_lag) %>%
           ggplot(aes(x = value)) +
           ggtitle(paste("ID:",id_i)) +
           geom_histogram(bins = 20, na.rm = TRUE) +
@@ -310,7 +253,6 @@ data_long_hpo <- interpolate(raw_data_long, train_counters, interpolation_type)
 # Plot imputed values for example IDS
 
 example_id <- c(72425, 73479, 72291)
-
 
 for (id_i in unique(data_long_hpo$id)) {
   
@@ -595,25 +537,26 @@ for (n_lags_i in seq(1, 7, 1)) { # Optimize the number of lagged features
 
 
 # Save hps per id which maximize accuracy
-optim_criteria <- "RMSE" #TODO change to sMAPE or MAE?
+optim_criteria <- "RMSE" 
 opt_hps <- val_metrics %>%
   group_by(id) %>%
   filter(.data[[optim_criteria]] == min(.data[[optim_criteria]], na.rm = TRUE)) %>%
-  slice_head(n = 1) %>% # debug: multiple HP combo solutions for min-RMSE per id, arbitrarily take the first HP combo 
+  slice_head(n = 1) %>%  
   ungroup() %>% 
-  dplyr::select(id, n_lags, lambda, alpha, RMSE, sMAPE, MAE)
+  dplyr::select(id, n_lags, lambda, alpha, RMSE)
 
 
-# Format numeric columns APA-style and print table ready for latex document
+# HP Table
 opt_hps_apa <- opt_hps %>%
   mutate(
-    RMSE  = round(RMSE, 3),
-    sMAPE = round(sMAPE, 3),
-    MAE   = round(MAE, 3),
-    lambda = formatC(lambda, format = "f", digits = 2)
+    id = round(id, 0),
+    n_lags = round(n_lags, 0),
+    lambda = formatC(lambda, format = "f", digits = 2),
+    alpha = round(alpha, 0),
+    RMSE  = round(RMSE, 2)
   )
-apa_tab <- xtable(opt_hps_apa,caption="Optimal Hyperparameters per Participant", label="tab:opt_hps")
-print(apa_tab, include.rownames = FALSE, sanitize.text.function = identity, comment = FALSE)
+hpo_enr_tab <- xtable(opt_hps_apa,caption= paste0(target_item, "Optimal Hyperparameters for ENR per Participant"), label="tab:opt_hps")
+print(hpo_enr_tab, include.rownames = FALSE, sanitize.text.function = identity, comment = FALSE)
 
 #-----------------------------------------------------------------------------------------------------------------
 #--------------------------------------------- ENR Without PIs --------------------------------------------------
@@ -859,12 +802,6 @@ perm_test <- symmetry_test(
   distribution = approximate(nresample = 5000)  # approximate = Monte Carlo resampling
 )
 perm_test
-
-# Echten wert mit Verteilung der RMSE-Mittelwertsdifferenzen über ids hinweg vergleichen. 
-# 5000 mal permutieren (innerhalb jeder person random leakage vs clean vertauschen)
-# wahrscheinlichkeitsdichte der vertielung --> echte mittelwertsdifferenz wie wahrscheinlich wenn 
-# die durch permutation entstandene verteilung (unter annahme der nullhypothese) gilt? 
-
 
 # analysis of penalization 
 # see glm_summary --> n_nonzero coefficients, etc
@@ -1224,14 +1161,11 @@ for (id_i in unique(df_hpo$id)) {
 
 
 
-# Results-Table
+# LaTeX Table
 opt_hpo_RFR %>%
   mutate(
-    RMSE = round(RMSE, 2),
-    mtry = as.integer(mtry),
-    nodesize = as.integer(nodesize),
-    n_lags = as.integer(n_lags),
-    n_tree = as.integer(n_tree)
+    RMSE     = round(RMSE, 2),
+    across(c(mtry, nodesize, n_lags, n_tree), as.integer)
   ) %>%
   kable(
     format = "latex",
@@ -1248,17 +1182,11 @@ opt_hpo_RFR %>%
     caption = "Optimal hyperparameters (RFR) per ID"
   ) %>%
   kable_styling(
-    latex_options = c("hold_position"),
+    latex_options = "hold_position",
     font_size = 10,
     position = "left"
   ) %>%
-  row_spec(0, bold = TRUE) %>%
-  as.character() %>%
-  paste0(
-    "\\captionsetup{labelformat=empty}\n",
-    "\\raggedright\n",
-    .
-  )
+  row_spec(0, bold = TRUE)
 
 #--------------------------------------- Predictions for RFR --------------------------------------------------------------############
 # Fit random forest regression and predict target_item per id
@@ -1363,6 +1291,41 @@ for (id_i in unique(df_hpo$id)) {
   sensitivity_results_i <- sensitivity_analysis(median_preds, y_test, test_counter, id_i, n_lags_i)
   sensitivity_results_RFR <- bind_rows(sensitivity_results_RFR, sensitivity_results_i)
 }
+
+#------------------ Sensitivity Analysis RFR: Results --------------------------------------------------
+sensitivity_results_RFR <- sensitivity_results_RFR %>%
+  mutate(zone = factor(zone,
+                       levels = c("leakage_zone", "clean_zone"),
+                       labels = c("leakage", "clean")
+  ),
+  id = as.factor(id))
+
+# RMSE per ID per zone
+sensitivity_wide_RFR <- sensitivity_results_RFR %>%
+  pivot_wider(names_from = zone, values_from = RMSE) 
+
+# Plot
+ggplot(sensitivity_results_RFR, aes(x = zone, y = RMSE, fill = zone)) +
+  geom_boxplot(alpha = 0.6) +
+  labs(
+    title = "RMSE in leakage vs. clean zone across participants",
+    x = NULL,
+    y = "RMSE"
+  ) +
+  theme_minimal()
+
+
+# Observed mean difference
+obs_diff_RFR <- mean(sensitivity_wide_RFR$leakage - sensitivity_wide_RFR$clean, na.rm = TRUE)
+cat("Observed mean difference (leakage - clean):", round(obs_diff_RFR, 4), "\n")
+
+perm_test_RFR <- symmetry_test(
+  RMSE ~ zone | id,      
+  data = sensitivity_results_RFR,
+  alternative = "less",  # leakage < clean
+  distribution = approximate(nresample = 5000)  # approximate = Monte Carlo resampling
+)
+perm_test_RFR
 
 
 #------------------------------------------------------------------------------------------------------------------
@@ -1606,6 +1569,28 @@ AR_UQ %>%
         caption= paste0(target_item,"AR(1): Person-Specific Accuracy and Uncertainty Quantification (Residual Bootstrap)")) %>%
   kable_styling(latex_options=c("repeat_header"), font_size=8)
 
+# IDs with lowest, highest and median RMSE
+rmse_per_id_ar <- test_metrics_ar %>%
+  distinct(id, RMSE)
+
+lowest_rmse_id_ar <- rmse_per_id_ar %>%
+  slice_min(RMSE, n = 1)
+
+lowest_rmse_id_ar
+
+highest_rmse_id_ar <- rmse_per_id %>%
+  slice_max(RMSE, n = 1)
+
+highest_rmse_id_ar
+
+median_value_ar <- median(rmse_per_id_ar$RMSE, na.rm = TRUE)
+
+median_rmse_id_ar <- rmse_per_id_ar %>%
+  mutate(distance = abs(RMSE - median_value_ar)) %>%
+  slice_min(distance, n = 1) %>%
+  select(id, RMSE)
+
+median_rmse_id_ar
 
 #--------- ENR Model ---------------------------------------------------------------------------------
 # first, get all UQ methods of the ENR Model in one (wide) data frame
@@ -1656,6 +1641,31 @@ ENR_UQ %>%
   )
 
 
+
+# IDs with lowest, highest and median RMSE
+representative_ids <- function(df, metric = RMSE) {
+  df %>%
+    group_by(Method) %>%
+    mutate(med_val = median({{ metric }}, na.rm = TRUE)) %>%
+    summarise(
+      lowest_id   = id[which.min({{ metric }})],
+      lowest_val  = min({{ metric }}, na.rm = TRUE),
+      
+      highest_id  = id[which.max({{ metric }})],
+      highest_val = max({{ metric }}, na.rm = TRUE),
+      
+      median_id   = id[which.min(abs({{ metric }} - med_val))],
+      median_val  = {{ metric }}[which.min(abs({{ metric }} - med_val))],
+      
+      .groups = "drop"
+    )
+}
+
+represantative_ids_rmse_ENR <- representative_ids(ENR_UQ, RMSE)
+representative_ids_rmse_ENR
+
+
+
 #--------------- Quantile RFR Model-------------------------------------------------------------------------------
 
 RFR_UQ <- test_metrics_RFR %>%
@@ -1678,6 +1688,36 @@ RFR_UQ %>%
   kable(format="latex", booktabs=TRUE, digits=2, longtable=TRUE,
         caption=paste0(target_item,"RFR: Person-Specific Accuracy and Uncertainty Quantification (Quantile Random Forest)"))%>%
   kable_styling(latex_options=c("repeat_header"), font_size=8)
+
+# IDs with lowest, highest and median RMSE
+rfr_rmse_per_id <- RFR_UQ %>%
+  transmute(
+    id,
+    RMSE = `Quantile RFR - RMSE`
+  ) %>%
+  filter(!is.na(RMSE))
+
+# lowest
+lowest_rfr <- rfr_rmse_per_id %>%
+  slice_min(RMSE, n = 1)
+
+# highest
+highest_rfr <- rfr_rmse_per_id %>%
+  slice_max(RMSE, n = 1)
+
+# median person (closest to median RMSE)
+median_val_rfr <- median(rfr_rmse_per_id$RMSE, na.rm = TRUE)
+
+median_rfr <- rfr_rmse_per_id %>%
+  mutate(dist = abs(RMSE - median_val_rfr)) %>%
+  slice_min(dist, n = 1) %>%
+  select(id, RMSE)
+
+list(
+  lowest  = lowest_rfr,
+  highest = highest_rfr,
+  median  = median_rfr
+)
 
 #--------------------------------------------------------------------------------------------------------------
 #----------------------------- Residual Plots -----------------------------------------------------------------
