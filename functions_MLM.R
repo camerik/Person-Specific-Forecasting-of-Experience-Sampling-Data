@@ -853,3 +853,49 @@ undo_transformations <- function(preds, id_i, target_item, std_stats, trend_para
   return(preds)
 }
 
+# Plots
+# Histogram
+histogram_rmse <- function(df,
+                      metric_col,
+                      xlab,
+                      method_levels,
+                      palette = NULL,
+                      show_y_labels = TRUE) {
+  
+  df_m <- df |>
+    dplyr::transmute(
+      Method = factor(Method, levels = method_levels),
+      value  = .data[[metric_col]]
+    ) |>
+    dplyr::filter(!is.na(value))
+  
+  p <- ggplot2::ggplot(
+    df_m,
+    ggplot2::aes(x = value, y = Method, fill = Method, color = Method)
+  ) +
+    ggdist::stat_halfeye(
+      adjust = 1,
+      slab_alpha = 0.55,
+      .width = c(0.66, 0.95),
+      point_interval = ggdist::median_qi,
+      size = 0.6
+    ) +
+    ggplot2::scale_y_discrete(limits = rev(method_levels)) +
+    ggplot2::labs(x = xlab, y = NULL) +
+    ggplot2::theme_classic(base_size = 12) +
+    ggplot2::theme(
+      legend.position = "none",
+      axis.text.y  = if (show_y_labels) ggplot2::element_text() else ggplot2::element_blank(),
+      axis.ticks.y = ggplot2::element_blank()
+    )
+  
+  if (!is.null(palette)) {
+    p <- p +
+      ggplot2::scale_fill_manual(values = palette, drop = FALSE) +
+      ggplot2::scale_color_manual(values = palette, drop = FALSE)
+  }
+  
+  p
+}
+
+
