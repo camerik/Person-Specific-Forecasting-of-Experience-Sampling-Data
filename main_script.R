@@ -1569,28 +1569,6 @@ AR_UQ %>%
         caption= paste0(target_item,"AR(1): Person-Specific Accuracy and Uncertainty Quantification (Residual Bootstrap)")) %>%
   kable_styling(latex_options=c("repeat_header"), font_size=8)
 
-# IDs with lowest, highest and median RMSE
-rmse_per_id_ar <- test_metrics_ar %>%
-  distinct(id, RMSE)
-
-lowest_rmse_id_ar <- rmse_per_id_ar %>%
-  slice_min(RMSE, n = 1)
-
-lowest_rmse_id_ar
-
-highest_rmse_id_ar <- rmse_per_id %>%
-  slice_max(RMSE, n = 1)
-
-highest_rmse_id_ar
-
-median_value_ar <- median(rmse_per_id_ar$RMSE, na.rm = TRUE)
-
-median_rmse_id_ar <- rmse_per_id_ar %>%
-  mutate(distance = abs(RMSE - median_value_ar)) %>%
-  slice_min(distance, n = 1) %>%
-  select(id, RMSE)
-
-median_rmse_id_ar
 
 #--------- ENR Model ---------------------------------------------------------------------------------
 # first, get all UQ methods of the ENR Model in one (wide) data frame
@@ -1642,28 +1620,6 @@ ENR_UQ %>%
 
 
 
-# IDs with lowest, highest and median RMSE
-representative_ids <- function(df, metric = RMSE) {
-  df %>%
-    group_by(Method) %>%
-    mutate(med_val = median({{ metric }}, na.rm = TRUE)) %>%
-    summarise(
-      lowest_id   = id[which.min({{ metric }})],
-      lowest_val  = min({{ metric }}, na.rm = TRUE),
-      
-      highest_id  = id[which.max({{ metric }})],
-      highest_val = max({{ metric }}, na.rm = TRUE),
-      
-      median_id   = id[which.min(abs({{ metric }} - med_val))],
-      median_val  = {{ metric }}[which.min(abs({{ metric }} - med_val))],
-      
-      .groups = "drop"
-    )
-}
-
-represantative_ids_rmse_ENR <- representative_ids(ENR_UQ, RMSE)
-representative_ids_rmse_ENR
-
 
 
 #--------------- Quantile RFR Model-------------------------------------------------------------------------------
@@ -1689,41 +1645,98 @@ RFR_UQ %>%
         caption=paste0(target_item,"RFR: Person-Specific Accuracy and Uncertainty Quantification (Quantile Random Forest)"))%>%
   kable_styling(latex_options=c("repeat_header"), font_size=8)
 
-# IDs with lowest, highest and median RMSE
-rfr_rmse_per_id <- RFR_UQ %>%
-  transmute(
-    id,
-    RMSE = `Quantile RFR - RMSE`
-  ) %>%
-  filter(!is.na(RMSE))
 
-# lowest
-lowest_rfr <- rfr_rmse_per_id %>%
-  slice_min(RMSE, n = 1)
-
-# highest
-highest_rfr <- rfr_rmse_per_id %>%
-  slice_max(RMSE, n = 1)
-
-# median person (closest to median RMSE)
-median_val_rfr <- median(rfr_rmse_per_id$RMSE, na.rm = TRUE)
-
-median_rfr <- rfr_rmse_per_id %>%
-  mutate(dist = abs(RMSE - median_val_rfr)) %>%
-  slice_min(dist, n = 1) %>%
-  select(id, RMSE)
-
-list(
-  lowest  = lowest_rfr,
-  highest = highest_rfr,
-  median  = median_rfr
-)
 
 #--------------------------------------------------------------------------------------------------------------
 #----------------------------- Residual Plots -----------------------------------------------------------------
 #-------------------- Residual Plots - Train + Val-Set --------------------------------------------------------
 #--------------------------------------------------------------------------------------------------------------
-# relevant IDs (72425, 73479, 72291))
+# representative IDs
+
+# 1) RMSE pro Modell extrahieren
+rmse_ar <- AR_UQ %>%
+  transmute(
+    id,
+    RMSE = `AR(1) RB - RMSE`,
+    Model = "AR(1)"
+  ) %>%
+  filter(!is.na(RMSE))
+
+rmse_enr <- ENR_UQ %>%
+  filter(Method == "ENR RB") %>%   # <- ggf. "ENR SB" oder "ENR BB"
+  distinct(id, RMSE) %>%
+  transmute(
+    id,
+    RMSE,
+    Model = "ENR"
+  ) %>%
+  filter(!is.na(RMSE))
+
+rmse_rfr <- RFR_UQ %>%
+  transmute(
+    id,
+    RMSE = `Quantile RFR - RMSE`,
+    Model = "RFR"
+  ) %>%
+  filter(!is.na(RMSE))
+
+# Alles zusammen
+rmse_all <- bind_rows(rmse_ar, rmse_enr, rmse_rfr)
+
+# Optional: check, dass jede (id, Model)-Kombi genau einmal vorkommt
+# rmse_all %>% count(id, Model) %>% filter(n != 1)
+
+# -------------------------------------------
+# 2) Pro Modell: Rang (1 = kleinster RMSE)
+# -------------------------------------------
+
+rmse_ranks <- rmse_all %>%
+  group_by(Model) %>%
+  mutate(rk = rank(RMSE)) %>%   # keine ties angenommen -> eindeutig
+  ungroup()
+
+# --------------------------------------------------------
+# 3) Globaler Difficulty-Index: mean rank über alle Modelle
+# --------------------------------------------------------
+
+difficulty <- rmse_ranks %>%
+  summarise(mean_rank = mean(rk), .by = id)
+
+# ------------------------------------------
+# 4) Easy / Typical / Hard bestimmen
+# ------------------------------------------
+
+easy_id <- difficulty %>% slice_min(mean_rank, n = 1)
+hard_id <- difficulty %>% slice_max(mean_rank, n = 1)
+
+median_val <- median(difficulty$mean_rank)
+typical_id <- difficulty %>%
+  mutate(dist = abs(mean_rank - median_val)) %>%
+  slice_min(dist, n = 1) %>%
+  select(id, mean_rank)
+
+# Ausgabe der drei IDs
+list(
+  easy    = easy_id,
+  typical = typical_id,
+  hard    = hard_id
+)
+
+# -------------------------------------------------------
+# 5) (Optional) IDs als Fix-Set für Plotting vorbereiten
+# -------------------------------------------------------
+
+ids_fixed <- bind_rows(
+  easy_id    %>% transmute(id, Case = "easy"),
+  typical_id %>% transmute(id, Case = "typical"),
+  hard_id    %>% transmute(id, Case = "hard")
+)
+
+ids_fixed
+
+
+
+
 metrics_train <- list(train_metrics_ar, train_metrics, train_metrics_RFR)
 predictions_train <- list(train_predictions_ar, train_predictions, train_predictions_RFR)
 names_train <- c("AR(1)", "ENR", "Quantile RFR")
@@ -1958,6 +1971,48 @@ for (i in seq(1, 5)) {
     )
   }
 }
+
+
+# get representative IDs
+
+# RMSE per model
+rmse_all <- bind_rows(
+  test_metrics_ar  %>% distinct(id, RMSE) %>% mutate(Model = "AR(1)"),
+  test_metrics     %>% distinct(id, RMSE) %>% mutate(Model = "ENR"),
+  test_metrics_RFR %>% distinct(id, RMSE) %>% mutate(Model = "RFR")
+) 
+
+# rank per model
+rmse_ranks <- rmse_all %>%
+  group_by(Model) %>%
+  mutate(rk = rank(RMSE)) %>%
+  ungroup()
+
+# mean rank over all models
+difficulty <- rmse_ranks %>%
+  summarise(mean_rank = mean(rk), .by = id)
+
+# easy / typical / hard IDs 
+best_id <- difficulty %>% slice_min(mean_rank, n = 1)
+worst_id <- difficulty %>% slice_max(mean_rank, n = 1)
+
+median_val <- median(difficulty$mean_rank)
+typical_id <- difficulty %>%
+  mutate(dist = abs(mean_rank - median_val)) %>%
+  slice_min(dist, n = 1) %>%
+  select(id, mean_rank) %>%
+  slice(1)
+
+list(
+  best    = easy_id,
+  typical = typical_id,
+  worst    = hard_id
+)
+
+# save representative IDS
+representative_ids <- c(best_id$id, typical_id$id, worst_id$id)
+representative_ids
+
 
 # TODO: In diskussion beschreiben dass zusammenhang zwischen features und target nicht richtig geschätzt wurde bei den personen die nicht funktioneirne
 # ABER: auch mit random forests nicht und diese nehemen keinen linearen zusammenhang an! residual plots in trainingsset anschauen --------------------------------------------------
