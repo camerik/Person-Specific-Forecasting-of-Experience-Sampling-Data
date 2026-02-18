@@ -232,7 +232,7 @@ data_statistics <- raw_data_long %>%
 # Plot
 for (id_i in unique(raw_data_long$id)) {
   print(raw_data_long %>%
-          dplyr::filter(id == id_i) %>%
+          dplyr::filter(., id == id_i) %>%
           dplyr::filter(item %in% features_to_lag) %>%
           ggplot(aes(x = value)) +
           ggtitle(paste("ID:",id_i)) +
@@ -258,13 +258,13 @@ for (id_i in unique(data_long_hpo$id)) {
   
   # raw with NAs
   df_raw <- raw_data_long %>%
-    dplyr::filter(id == id_i, item == target_item) %>%
+    dplyr::filter(., id == id_i, item == target_item) %>%
     dplyr::select(counter, value_raw = value) %>%
     dplyr::arrange(counter)
   
   # imputed
   df_imp <- data_long_hpo %>%
-    dplyr::filter(id == id_i, item == target_item) %>%
+    dplyr::filter(., id == id_i, item == target_item) %>%
     dplyr::select(counter, value_imp = value) %>%
     dplyr::arrange(counter)
   
@@ -668,7 +668,7 @@ for (id_i in unique(df_hpo$id)) { # df_hpo, because df_eval includes ids without
 
 # -------- Analysis of Potential Overfitting  -------------------------------------------------------
 # Compute variance in target item per id
-target_variance <- y_test_raw %>%
+outcome_SD <- y_test_raw %>%
   filter(counter %in% test_counters) %>%
   group_by(id) %>%
   summarise(SD = sd(value, na.rm = TRUE))
@@ -681,7 +681,7 @@ combined_metrics <- train_metrics %>%
     by = "id"
   ) %>%
   inner_join(
-    target_variance,  # add variance column
+    outcome_SD, 
     by = "id"
   ) %>%
   rename(Outcome_SD = SD)
@@ -700,7 +700,7 @@ long_metrics <- combined_metrics %>%
   )
 
 # Plot 
-ggplot(long_metrics, aes(x = factor(id), y = Value, fill = Metric)) +
+overfitting <- ggplot(long_metrics, aes(x = factor(id), y = Value, fill = Metric)) +
   geom_bar(stat = "identity", position = "dodge") +
   labs(title = "RMSE and SD in Outcome item per ID",
        x = "ID", y = "Value") +
@@ -710,14 +710,31 @@ ggplot(long_metrics, aes(x = factor(id), y = Value, fill = Metric)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
+print(overfitting)
+
+ggsave(
+  filename = "figures/potentialoverfitting.png",
+  plot     = overfitting,
+  width    = 10,
+  height   = 6,
+  dpi      = 300
+)
+
 # correlation between Outcome_SD and Test RMSE
-correlation <- cor(combined_metrics$Outcome_SD, combined_metrics$RMSE_Test, use = "complete.obs")
-correlation
+cor_RMSE_SD <- cor.test(
+  combined_metrics$Outcome_SD,
+  combined_metrics$RMSE_Test,
+  use = "complete.obs",
+  method = "pearson"
+)
+
+cor_RMSE_SD
+
 
 # Respective Plot
 ggplot(combined_metrics, aes(x = Outcome_SD, y = RMSE_Test)) +
-  geom_point(color = "red", size = 3) +           # scatter points
-  geom_smooth(method = "lm", se = TRUE, color = "blue") +  # regression line with 95% CI
+  geom_point(color = "indianred1", size = 3) +           # scatter points
+  geom_smooth(method = "lm", se = TRUE, color = "dodgerblue3") +  # regression line with 95% CI
   labs(title = "Correlation between Target Std and Test RMSE",
        x = "Target Standard Deviation",
        y = "Test RMSE") +
@@ -1651,92 +1668,6 @@ RFR_UQ %>%
 #----------------------------- Residual Plots -----------------------------------------------------------------
 #-------------------- Residual Plots - Train + Val-Set --------------------------------------------------------
 #--------------------------------------------------------------------------------------------------------------
-# representative IDs
-
-# 1) RMSE pro Modell extrahieren
-rmse_ar <- AR_UQ %>%
-  transmute(
-    id,
-    RMSE = `AR(1) RB - RMSE`,
-    Model = "AR(1)"
-  ) %>%
-  filter(!is.na(RMSE))
-
-rmse_enr <- ENR_UQ %>%
-  filter(Method == "ENR RB") %>%   # <- ggf. "ENR SB" oder "ENR BB"
-  distinct(id, RMSE) %>%
-  transmute(
-    id,
-    RMSE,
-    Model = "ENR"
-  ) %>%
-  filter(!is.na(RMSE))
-
-rmse_rfr <- RFR_UQ %>%
-  transmute(
-    id,
-    RMSE = `Quantile RFR - RMSE`,
-    Model = "RFR"
-  ) %>%
-  filter(!is.na(RMSE))
-
-# Alles zusammen
-rmse_all <- bind_rows(rmse_ar, rmse_enr, rmse_rfr)
-
-# Optional: check, dass jede (id, Model)-Kombi genau einmal vorkommt
-# rmse_all %>% count(id, Model) %>% filter(n != 1)
-
-# -------------------------------------------
-# 2) Pro Modell: Rang (1 = kleinster RMSE)
-# -------------------------------------------
-
-rmse_ranks <- rmse_all %>%
-  group_by(Model) %>%
-  mutate(rk = rank(RMSE)) %>%   # keine ties angenommen -> eindeutig
-  ungroup()
-
-# --------------------------------------------------------
-# 3) Globaler Difficulty-Index: mean rank über alle Modelle
-# --------------------------------------------------------
-
-difficulty <- rmse_ranks %>%
-  summarise(mean_rank = mean(rk), .by = id)
-
-# ------------------------------------------
-# 4) Easy / Typical / Hard bestimmen
-# ------------------------------------------
-
-easy_id <- difficulty %>% slice_min(mean_rank, n = 1)
-hard_id <- difficulty %>% slice_max(mean_rank, n = 1)
-
-median_val <- median(difficulty$mean_rank)
-typical_id <- difficulty %>%
-  mutate(dist = abs(mean_rank - median_val)) %>%
-  slice_min(dist, n = 1) %>%
-  select(id, mean_rank)
-
-# Ausgabe der drei IDs
-list(
-  easy    = easy_id,
-  typical = typical_id,
-  hard    = hard_id
-)
-
-# -------------------------------------------------------
-# 5) (Optional) IDs als Fix-Set für Plotting vorbereiten
-# -------------------------------------------------------
-
-ids_fixed <- bind_rows(
-  easy_id    %>% transmute(id, Case = "easy"),
-  typical_id %>% transmute(id, Case = "typical"),
-  hard_id    %>% transmute(id, Case = "hard")
-)
-
-ids_fixed
-
-
-
-
 metrics_train <- list(train_metrics_ar, train_metrics, train_metrics_RFR)
 predictions_train <- list(train_predictions_ar, train_predictions, train_predictions_RFR)
 names_train <- c("AR(1)", "ENR", "Quantile RFR")
@@ -1751,8 +1682,8 @@ for (i in seq(1, 3, 1)) {
   
   for (id_i in unique(df_hpo$id))  {
     # Extract In-Sample Predictions for this ID
-    y_obs <- (preds_i %>% dplyr::filter(id == id_i))$y_obs_train
-    y_pred <- (preds_i %>% dplyr::filter(id == id_i))$y_pred_train
+    y_obs <- (preds_i %>% dplyr::filter(., id == id_i))$y_obs_train
+    y_pred <- (preds_i %>% dplyr::filter(., id == id_i))$y_pred_train
     
     # Residual Plots - Training Set
       
@@ -1823,15 +1754,22 @@ for (i in seq(1, 3, 1)) {
 metrics <- list(test_metrics_ar, test_metrics_boot, test_metrics_resid_boot, test_metrics_block_boot, test_metrics_RFR)
 predictions <- list(test_predictions_ar, test_predictions_boot, test_predictions_resid_boot, test_predictions_block_boot, test_predictions_RFR)
 names <- c( "AR1 - Residual Bootstrap", "Standard Bootstrap", "Residual Bootstrap", "Block Bootstrap", "Quantile RFR")
+
+# for safe plotnames
+safe_name <- function(x) gsub("[^A-Za-z0-9]+", "_", x)
+
 # Loop for different bootstrap variations
 for (i in seq(1, 5)) {
   name_i <- names[[i]]
   metrics_i <- metrics[[i]]
   preds_i <- predictions[[i]]
   
+  out_dir <- file.path("Figures", safe_name(name_i))
+  dir.create(out_dir, showWarnings = FALSE)
+  
   for (id_i in unique(df_hpo$id)) {
     # Extract training + test predictions for this ID
-    y_train <- (data_long_eval %>% filter(id == id_i, counter %in% train_val_counters, item == target_item))$value
+    y_train <- (data_long_eval %>% filter(., id == id_i, counter %in% train_val_counters, item == target_item))$value
     y_obs  <- (preds_i %>% filter(id == id_i))$y_obs
     y_preds <- (preds_i %>% filter(id == id_i))$y_preds
     lower <- (preds_i %>% filter(id == id_i))$pred_lower
@@ -1857,8 +1795,8 @@ for (i in seq(1, 5)) {
       type = "Test"
     )
     
-    print(
-      ggplot() +
+    
+     forecast_plot <-  ggplot() +
         geom_ribbon(
           data = df_test,
           aes(x = time, ymin = lower, ymax = upper, fill = "95% Prediction Interval"),
@@ -1908,31 +1846,24 @@ for (i in seq(1, 5)) {
         ) +
         theme_minimal() +
         theme(axis.text.x = element_text(angle = 45, hjust = 1))
-    )
+     
+     # print and safe each plot
+     print(forecast_plot)
+     ggsave(
+       filename = file.path(out_dir, paste0("forecast_id_", id_i, ".png")),
+       plot = forecast_plot, width = 10, height = 5, dpi = 300)
   }
-  
-  
-  print(ggplot(preds_i, aes(x = y_obs, y = y_preds)) +
-          geom_point(alpha = 0.5) +
-          geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
-          facet_wrap(~ id, scales = "free") +
-          labs(
-            x = "Observed",
-            y = "Predicted",
-            title = paste("Observed vs Predict per ID for", name_i)
-          ) +
-          theme_minimal())
-  
+
   
   # Residual Plots 
   for (id_i in unique(df_hpo$id)) {
     
     preds_i_with_res <- preds_i %>% # hab ich schon definiert, hier eig doppelter code
-      dplyr::filter(id == id_i) %>%
+      dplyr::filter(., id == id_i) %>%
       dplyr::mutate(resid = y_obs - y_preds)
     
-    print(
-      ggplot(preds_i_with_res, aes(x = y_preds, y = resid)) +
+    
+     test_resid_plot <- ggplot(preds_i_with_res, aes(x = y_preds, y = resid)) +
         geom_point(
           aes(color = abs(resid)),
           alpha = 0.45,
@@ -1968,7 +1899,13 @@ for (i in seq(1, 5)) {
         ) +
         coord_cartesian(ylim = c(-70, 70)) +
         guides(color = guide_colorbar(barwidth = 1, barheight = 14))
-    )
+    
+     # print and safe plots
+     
+     ggsave(
+       filename = file.path(out_dir, paste0("test_residuals_id_", id_i, ".png")),
+       plot = test_resid_plot, width = 7.5, height = 5.5, dpi = 300
+     )
   }
 }
 
