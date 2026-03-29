@@ -426,34 +426,6 @@ diff_and_detrend <- function(data, trans_info) {
   return(transformed_data)
 }
 #-----------------------------------------------------------------------------------------------------
-
-# Backtransform to original scale
-#undo_diff_and_detrend <- function(data, trans_info) {
-#  transformed_data = data %>%
-#    dplyr::left_join(trans_info, by=c("id", "item")) %>%
-#    dplyr::arrange("counter") %>%
-#    group_by(id, item) %>%
-#    group_modify(~ {
-#      trans <- unique(.x$transformation)
-#      .x %>%
-#        mutate(
-#          value = if (trans == "difference") {
-#            stats::diffinv(x=value, xi=params[[1]])[-1]
-#          } else if (trans == "detrend_linear") { 
-#            value + predict(params[[1]][[1]], newdata = tibble(counter=counter))
-#          } else if (trans == "detrend_quadratic") { 
-#            value + predict(params[[1]][[1]], newdata = tibble(counter=counter))
-#          } else {
-#            value
-#          }
-#        )
-#    }) %>% 
-#    tidyr::drop_na() %>% 
-#    dplyr::select(-transformation, -params)
-#  return(transformed_data)
-#}
-#
-
 # per time series (used in loop)
 undo_diff_and_detrend_single <- function(values, counters, transformation, params) {
   # Ensure correct order by counter
@@ -480,7 +452,7 @@ undo_diff_and_detrend_single <- function(values, counters, transformation, param
 undo_diff_and_detrend_matrix <- function(values, counters, transformation, params) {
   # Ensure correct order by counter
   ord <- order(counters)
-  values <- values[ord, ] # As values is a matrix in this case, we need to select all rows and ensure order within rows
+  values <- values[ord, ] # select all rows and ensure order within rows
   counters <- counters[ord]
   
   # apply inverse transformation based on trend type
@@ -498,43 +470,10 @@ undo_diff_and_detrend_matrix <- function(values, counters, transformation, param
 
 
 
-
-############################################## TODO: BACKTRANSFORM ALL ITEMS #################################
-# # @param results Data with columns id, item, value (transformed), counter
-# #' @param trans_info Output of learn_transformations()
-# #' @return Data with 'predicted_orig'
-# undo_diff_and_detrend <- function(results, trans_info, target_item) {
-#   results <- results %>%
-#     mutate(
-#       item = target_item
-#     ) %>%
-#     rename("value" := !!target_item)
-#   results_inverted <- results %>%
-#     left_join(trans_info, by = c("id", "item")) %>%
-#     rowwise() %>%
-#     mutate(predicted_orig = {
-#       if (transformation == "difference") {
-#         params$last_value + value
-#       } else if (transformation == "detrend_linear") {
-#         value + predict(params$model, newdata = tibble(counter = counter))
-#       } else if (transformation == "detrend_quadratic") {
-#         value + predict(params$model, newdata = tibble(counter = counter))
-#       } else value
-#     }) %>%
-#     ungroup() %>%
-#     dplyr::select(-transformation, -params)  # drop helper columns
-#   
-#   results_inverted <- results_inverted %>%
-#     rename(!!target_item := predicted_orig) %>%
-#     dplyr::select(-value)
-#   return (results_inverted)
-# }
-
-
-
-create_lag_features <- function(df, id_col, time_col, target_col, n_lags = 5, numeric_features = NULL) {
+create_lagged_features <- function(df, id_col, time_col, target_col, n_lags = 5, numeric_features = NULL) {
   # ensure order
-  df <- df %>% arrange(!!sym(id_col), !!!syms(time_col))
+  df <- df %>%
+    arrange(across(all_of(c(id_col, time_col))))
   
   # Automatically select numeric features if not provided and remove id and time
   if (is.null(numeric_features)) {
@@ -543,13 +482,13 @@ create_lag_features <- function(df, id_col, time_col, target_col, n_lags = 5, nu
   }
   
   # Start with id, time, and target
-  df_lagged <- df %>% select(all_of(c(id_col, time_col, target_col))) #nimm depression zu zeitpunkt counter
+  df_lagged <- df %>% select(all_of(c(id_col, time_col, target_col))) 
   
-  # Loop over lags (no inner arrange)
+  # Loop over lags 
   for (lag in seq_len(n_lags)) {
     lagged_df <- df %>%
-      group_by(!!rlang::sym(id_col)) %>%
-      mutate(across(all_of(numeric_features), #packe die anderen features UND target item nur als lags in diese zeile
+      group_by(across(all_of(id_col))) %>%
+      mutate(across(all_of(numeric_features), 
                     ~ dplyr::lag(., n = lag),
                     .names = paste0("{.col}_lag", lag))) %>%
       ungroup() %>%
@@ -567,7 +506,7 @@ create_lag_features <- function(df, id_col, time_col, target_col, n_lags = 5, nu
 # so one row contains id, counter, target_item at that counter-time, lagged values of ALL features INCLUDING
 # target_item 
 
-#------------------------------------AR(1) Model---------------------------------------
+#------------------------------------ AR(1) Model ---------------------------------------
 check_ar1_residuals <- function(
     ts_train_val,
     target_item, 
@@ -650,8 +589,6 @@ check_ar1_residuals <- function(
   )
 }
 #----------------------------------------
-
-
 # function to compute metrics
 compute_metrics <- function(y_obs, y_pred,
                             pred_lower = NULL, pred_upper = NULL,
@@ -816,7 +753,7 @@ sensitivity_analysis <- function(y_pred, y_test, test_counter, id_i, n_lags_i) {
     y_pred = as.numeric(y_pred),
   ) %>%
     mutate(
-      zone = if_else(row_number() <= n_lags_i, "leakage_zone", "clean_zone") # TODO: leakage eig nur in zone n_lags-1? NEIN, passt, siehe IPAD
+      zone = if_else(row_number() <= n_lags_i, "leakage_zone", "clean_zone") 
     )
   
   # Fehler (RMSE) pro Zone
@@ -876,7 +813,7 @@ histogram_rmse <- function(df,
     ggdist::stat_halfeye(
       adjust = 1,
       slab_alpha = 0.55,
-      .width = c(0.66, 0.95),
+      .width = c(0.95),
       point_interval = ggdist::median_qi,
       size = 0.6
     ) +
