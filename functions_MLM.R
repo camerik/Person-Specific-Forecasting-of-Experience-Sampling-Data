@@ -1,21 +1,9 @@
-ACF_plot <- function(data, chosen_item, max_lag = 10) {
-  data %>%
-    dplyr::filter(item == chosen_item) %>%
-    dplyr::arrange(id, counter) %>%
-    tsibble::as_tsibble(key = id, index = counter) %>%
-    feasts::ACF(value, lag_max = max_lag) %>%
-    fabletools::autoplot() +
-    ggplot2::facet_wrap(~ id)
-}
+# ----------------------------------------------------------------------------------------------------
+# ----- Interpolation to tackle missing values -------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------
 
-
-
-interpolate <- function(df, counters,
-                        interpolation_type = "spline",
-                        min_value = 0, max_value = 100) {
-  
+interpolate <- function(df, counters, interpolation_type = "spline", min_value = 0, max_value = 100) {
   if (interpolation_type == "linear") {
-    
     df_inter <- df %>%
       dplyr::group_by(id, item) %>%
       dplyr::mutate(
@@ -36,7 +24,6 @@ interpolate <- function(df, counters,
       dplyr::ungroup()
     
   } else if (interpolation_type == "spline") {
-    
     df_inter <- df %>%
       dplyr::group_by(id, item) %>%
       dplyr::mutate(
@@ -56,16 +43,15 @@ interpolate <- function(df, counters,
       dplyr::ungroup()
     
   } else if (interpolation_type == "Kalman") {
-    
     df_inter <- df %>%
       dplyr::group_by(id, item) %>%
       dplyr::mutate(
         value = if (any(counter %in% counters)) {
           v <- value
           trainsplit <- counter %in% counters
-          v[trainsplit] <- imputeTS::na_kalman(
+          v[trainsplit] <- suppressWarnings(imputeTS::na_kalman(
             v[trainsplit]
-          )
+          ))
           v
         } else {
           value
@@ -77,28 +63,25 @@ interpolate <- function(df, counters,
   } else {
     stop("Interpolation type not implemented!")
   }
-  
   return(df_inter)
 }
 
 
+# ----------------------------------------------------------------------------------------------------
+# ----- Unit root test functions by Ryan et al., 2025 ------------------------------------------------
+# ----------------------------------------------------------------------------------------------------
 
-# ----- Unit root test by Ryan et al., 2025------------------------------------------------------------
-adf_flow <- function(x,
-                     alpha = 0.05, 
-                     diffX = FALSE, 
-                     modSel = "pval"){ # options: pval, AIC, BIC
-  
+adf_flow <- function(x, alpha = 0.05, diffX = FALSE, modSel = "pval"){ # options: pval, AIC, BIC
   y <- diff(x)
   n <- length(y)
   result1 <- result2 <- result3 <- NULL
   
   # data prep
-  if(isTRUE(diffX)){
+  if(isTRUE(diffX)) {
     yt <- y[-1]
     xt1 <- y[-length(y)]
     
-  } else if(isFALSE(diffX)){
+  } else if(isFALSE(diffX)) {
     yt <- y
     xt1 <- x[-length(x)]
   }
@@ -213,7 +196,6 @@ adf_flow <- function(x,
   
   
   # Test statistic for unit root: Parameter divided by SE
-  
   # Start of flowchart
   
   # -------- Step 1 ---------------------
@@ -239,9 +221,7 @@ adf_flow <- function(x,
       decision1  <- m_C$IC[3] < m_C$IC[2]
     }
     
-    
-    
-    # if the trend is significant, then the model is correctly specified. 
+    # If the trend is significant, then the model is correctly specified. 
     # that means we can retest the unit root using the standard normal distribution test
     if(decision1){
       PVAL2 <- summary(m3)$coefficients[2,4]
@@ -323,12 +303,8 @@ adf_flow <- function(x,
 
 
 
-# ------------------------------------------------------------------------
-# --------- Extended Function for Model Selection  -----------------------
-# ------------------------------------------------------------------------
-
-adf_translate <- function(ur, model){
-  # this function takes as input a unit-root decision (0 or 1) and a final model (m1, m2 or m3)
+# This function takes as input a unit-root decision (0 or 1) and a final model (m1, m2 or m3)
+adf_translate <- function(ur, model) {
   mvec <- c("yt ~ xt1 - 1","yt ~ xt1","yt ~ xt1 + t")
   mout <- as.character(model$call)[2]
   m_ind <- which(mvec == mout)
@@ -357,8 +333,10 @@ adf_translate <- function(ur, model){
 }
 
 #----------------------------------------------------------------------------------------------------
+#--------------------------------- Trend & Stationarity ---------------------------------------------
+#----------------------------------------------------------------------------------------------------
 
-# check which trend
+# Check which trend is present
 diagnose_trend_type <- function(data) {
   transforms <- data %>%
     group_by(id, item) %>%
@@ -399,7 +377,8 @@ diagnose_trend_type <- function(data) {
   return(transforms)
 }
 
-# transform
+
+# Transform to remove trend and ensure stationarity
 diff_and_detrend <- function(data, trans_info) {
   transformed_data = data %>%
     dplyr::left_join(trans_info, by=c("id", "item")) %>%
@@ -425,37 +404,20 @@ diff_and_detrend <- function(data, trans_info) {
     dplyr::select(-transformation, -params)
   return(transformed_data)
 }
-#-----------------------------------------------------------------------------------------------------
-# per time series (used in loop)
-undo_diff_and_detrend_single <- function(values, counters, transformation, params) {
-  # Ensure correct order by counter
-  ord <- order(counters)
-  values <- values[ord]
-  counters <- counters[ord]
-  
-  # new
-  
-  
-  # apply inverse transformation based on trend type
-  if (transformation == "difference") {
-    restored <-  stats::diffinv(x=value, xi=params[[1]])[-1] # delete first value
-  } else if (transformation %in% c("detrend_linear", "detrend_quadratic")) {
-    model <- params[[1]][[1]]
-    restored <- values + predict(model, newdata = tibble(counter = counters))
-  } else {
-    # "none" or unknown
-    restored <- values
-  }
-  return(restored)
-}
 
-undo_diff_and_detrend_matrix <- function(values, counters, transformation, params) {
+
+# The same functionality as above but per person (to be used in loop)
+undo_diff_and_detrend_single <- function(values, counters, transformation, params, is_matrix=FALSE) {
   # Ensure correct order by counter
   ord <- order(counters)
-  values <- values[ord, ] # select all rows and ensure order within rows
+  if (is_matrix) {
+    values <- values[ord,]
+  } else {
+    values <- values[ord]
+  }
   counters <- counters[ord]
   
-  # apply inverse transformation based on trend type
+  # Apply inverse transformation based on trend type
   if (transformation == "difference") {
     restored <-  stats::diffinv(x=value, xi=params[[1]])[-1] # delete first value
   } else if (transformation %in% c("detrend_linear", "detrend_quadratic")) {
@@ -469,9 +431,35 @@ undo_diff_and_detrend_matrix <- function(values, counters, transformation, param
 }
 
 
+# Combined function that undoes standardization and diff&detrending
+undo_transformations <- function(preds, id_i, target_item, std_stats, trend_parameter, counters, is_matrix=FALSE) {
+  # Undo standardization
+  mean_value <- (std_stats %>% filter(id == id_i, item == target_item))$mean_value
+  sd_value <- (std_stats %>% filter(id == id_i, item == target_item))$sd_value
+  preds <- preds * sd_value + mean_value
+  
+  # Undo detrending/differencing
+  transformation <- trend_parameter %>%
+    filter(id == id_i, item == target_item) %>%
+    pull(transformation)
+  params <- trend_parameter %>%
+    filter(id == id_i, item == target_item) %>%
+    pull(params)
+  
+  preds <- undo_diff_and_detrend_single(preds, counters, transformation, params, is_matrix)
+  return(preds)
+}
 
-create_lagged_features <- function(df, id_col, time_col, target_col, n_lags = 5, numeric_features = NULL) {
-  # ensure order
+
+#----------------------------------------------------------------------------------------------------
+#---------------------------------- Lagging Features Function ---------------------------------------
+#----------------------------------------------------------------------------------------------------
+
+# Create lagged features to include past predictors for forecasting
+# so one row contains id, counter, target_item at that counter-time, lagged values of ALL features INCLUDING
+# target_item 
+create_lagged_features <- function(df, id_col, time_col, target_col, n_lags=5, numeric_features=NULL) {
+  # Ensure order
   df <- df %>%
     arrange(across(all_of(c(id_col, time_col))))
   
@@ -503,105 +491,19 @@ create_lagged_features <- function(df, id_col, time_col, target_col, n_lags = 5,
   return(df_lagged)
 }
 
-# so one row contains id, counter, target_item at that counter-time, lagged values of ALL features INCLUDING
-# target_item 
+#----------------------------------------------------------------------------------------------------
+#----------------------------------- Metrics Helper Function ----------------------------------------
+#----------------------------------------------------------------------------------------------------
 
-#------------------------------------ AR(1) Model ---------------------------------------
-check_ar1_residuals <- function(
-    ts_train_val,
-    target_item, 
-    value_col = "value",
-    id_col = "id",
-    time_col = "counter",
-    lag_max = 30,
-    lb_lags = 10,
-    make_plots = TRUE
-) {
-  # Filter item and keep needed cols
-  df <- ts_train_val %>%
-    dplyr::filter(.data$item == target_item) %>%
-    dplyr::select(dplyr::all_of(c(id_col, time_col, "item", value_col))) %>% # per ID
-    tsibble::as_tsibble(
-      key   = dplyr::all_of(c(id_col, "item")),
-      index = dplyr::all_of(time_col)
-    )
-  
-  # Fit AR(1) per ID on train_val_set
-  fits <- df %>%
-    model(AR1 = ARIMA(.data[[value_col]] ~ pdq(1,0,0)))
-  
-  # Extract residuals
-  #    augment() gives .resid aligned with the time index
-  aug <- fits %>%
-    fabletools::augment() %>%
-    dplyr::rename(resid = .resid)
-  
-  # perform Ljung-Box test to check if residuals show autocorrelation
-  safe_lb_p <- function(x, lag) {
-    x <- stats::na.omit(x)
-    if (length(x) < (lag + 2)) return(NA_real_)
-    stats::Box.test(x, lag = lag, type = "Ljung-Box")$p.value
-  }
-  
-  # Summary table per ID: n, residual SD, Ljung-Box p, max abs ACF
-  # ACF computed on residual series per ID
-  acf_tbl <- aug %>%
-    dplyr::group_by(.data[[id_col]]) %>%
-    dplyr::summarise(
-      n_resid = sum(!is.na(resid)),
-      resid_sd = stats::sd(resid, na.rm = TRUE),
-      lb_pvalue = safe_lb_p(resid, lb_lags),
-      max_abs_acf = {
-        rr <- stats::na.omit(resid)
-        {
-          ac <- stats::acf(rr, plot = FALSE, lag.max = lag_max)$acf[-1] # drop lag 0
-          max(abs(ac), na.rm = TRUE)
-        }
-      },
-      .groups = "drop"
-    ) %>%
-    dplyr::mutate(
-      lb_flag_autocorr = dplyr::if_else(!is.na(lb_pvalue) & lb_pvalue < 0.05, TRUE, FALSE)
-    )
-  
-  # Visualization: ACF plots per ID using feasts::ACF
-  acf_plot <- NULL
-  if (isTRUE(make_plots)) {
-    acf_plot <- aug %>%
-      dplyr::filter(!is.na(resid)) %>%
-      dplyr::group_by(.data[[id_col]]) %>%
-      feasts::ACF(resid, lag_max = lag_max) #%>%
-    #ggplot2::autoplot() +
-    #ggplot2::facet_wrap(stats::as.formula(paste("~", id_col)), scales = "free_y") +
-    #ggplot2::labs(
-    #  title = paste0("ACF of AR(1) training residuals — item: ", item_name),
-    #  x = "Lag",
-    #  y = "ACF"
-    #) +
-    # ggplot2::theme_minimal()
-  }
-  
-  list(
-    fits = fits,
-    residuals_long = aug,
-    summary = acf_tbl,
-    acf_plot = acf_plot
-  )
-}
-#----------------------------------------
-# function to compute metrics
-compute_metrics <- function(y_obs, y_pred,
-                            pred_lower = NULL, pred_upper = NULL,
-                            alpha = 0.05) {
-  
-  # point forecast evaluation
+# Function to compute all relevant metrics for forecasting task
+compute_metrics <- function(y_obs, y_pred, pred_lower = NULL, pred_upper = NULL, alpha = 0.05) {
   mae_val  <- mean(abs(y_obs - y_pred), na.rm = TRUE)
   rmse_val <- sqrt(mean((y_obs - y_pred)^2, na.rm = TRUE))
   mse_val  <- mean((y_obs - y_pred)^2, na.rm = TRUE)
   smape_val <-smape(y_obs, y_pred) 
   
   
-  # if no PI, return only point forecast evaluation 
+  # If no PI, return only point forecast evaluation 
   if (is.null(pred_lower) || is.null(pred_upper)) {
     return(tibble(
       MAE = mae_val,
@@ -614,11 +516,9 @@ compute_metrics <- function(y_obs, y_pred,
     ))
   }
   
-  
-  # shorter name
+  # Shorter name
   lt <- pred_lower
   ut <- pred_upper
-  
   
   # Coverage
   coverage <- mean(y_obs >= lt & y_obs <= ut, na.rm = TRUE)
@@ -653,15 +553,13 @@ compute_metrics <- function(y_obs, y_pred,
   ))
 }
 
-# bootstrap using resampled residuals for Elastic Net Regression (as described in Efron, 1979)
+#----------------------------------------------------------------------------------------------------
+#----------------------------------- Bootstrapping Variants -----------------------------------------
+#----------------------------------------------------------------------------------------------------
 
-resid_bootstrap <- function(
-    X_train, y_train, X_test, # X_train and X_test neet to be matrices, y_train needs to be a numerical vecotr
-    alpha, lambda, # otpimized alpha and lambda
-    B = 500,
-    standardize = FALSE,
-    id, target_item, std_stats, trend_parameter, counters
-) {
+# Bootstrap using resampled residuals for Elastic Net Regression (as described in Efron, 1979)
+resid_bootstrap <- function(X_train, y_train, X_test,  alpha, lambda, B = 500, standardize = FALSE, 
+                            id, target_item, std_stats, trend_parameter, counters) {
     # Fit ENR
     fit0 <- glmnet(
       x = X_train,
@@ -671,17 +569,16 @@ resid_bootstrap <- function(
       standardize = standardize
     )
     
-    # compute residual e for each forecast step 
+    # Compute residual e for each forecast step 
     yhat_train <- as.vector(predict(fit0, newx = X_train, s = lambda))
     e <- y_train - yhat_train
     
-    # center residuals
+    # Center residuals
     e <- e - mean(e, na.rm = TRUE)
     
-    # point forecast on test set + invert transformations
+    # Point forecast on test set + invert transformations
     mu_point <- as.vector(predict(fit0, newx = X_test, s = lambda))
     mu_point <- undo_transformations(mu_point, id, target_item, std_stats, trend_parameter, counters)
-    
     
     # Create new bootstrap data by adding the resampled residuals to the fitted model fit0 and 
     # fit hte model with the new data B times
@@ -714,18 +611,17 @@ resid_bootstrap <- function(
     )
   }
 
+
+
 # Block Bootstrap - Stationary Bootstrap as described in (Politis & Romano, 1992)
-statistic_forecast <- function(
-    tseries, X_test, alpha, lambda,
-    mean___, sd___,
-    test_counters,
-    transformation, params) {
+statistic_forecast <- function(tseries, X_test, alpha, lambda, mean___, sd___, test_counters, 
+                               transformation, params, seed=47) {
+  set.seed(seed)
   
-  set.seed(47) # TODO: check again if it works
-  
-  # tseries: bootstrap replicate of length n.sim
+  # Tseries: bootstrap replicate of length n.sim
   y_b <- as.numeric(tseries[, 1])
   X_b <- as.matrix(tseries[, -1, drop = FALSE])
+  
   # Fit glmnet on bootstrapped ts
   fit_b <- glmnet(
     x = X_b,
@@ -734,16 +630,19 @@ statistic_forecast <- function(
     lambda = lambda_i,
     standardize = FALSE
   )
+  
   # Predict on test set
   preds <- as.numeric(predict(fit_b, newx = X_test, s = lambda_i))
   # Undo standardization (same as original)
   preds <- preds * sd___ + mean___
   # Undo detrending/differencing (same as original)
   preds <- undo_diff_and_detrend_single(preds, test_counters, transformation, params)
-  return(preds)  # numeric vector length = nrow(X_test)X_test    = X_test,
+  return(preds)
 }
 
-
+#----------------------------------------------------------------------------------------------------
+#---------------------------------- Analysis Functions ----------------------------------------------
+#----------------------------------------------------------------------------------------------------
 
 sensitivity_analysis <- function(y_pred, y_test, test_counter, id_i, n_lags_i) {
   errors_df <- tibble(
@@ -767,43 +666,16 @@ sensitivity_analysis <- function(y_pred, y_test, test_counter, id_i, n_lags_i) {
   return(zone_metrics)
 }
 
+#----------------------------------------------------------------------------------------------------
+#-------------------------------------- Plot Functions ----------------------------------------------
+#----------------------------------------------------------------------------------------------------
 
-undo_transformations <- function(preds, id_i, target_item, std_stats, trend_parameter, counters, is_matrix=FALSE) {
-  # Undo standardization
-  mean_value <- (std_stats %>% filter(id == id_i, item == target_item))$mean_value
-  sd_value <- (std_stats %>% filter(id == id_i, item == target_item))$sd_value
-  preds <- preds * sd_value + mean_value
-  
-  # Undo detrending/differencing
-  transformation <- trend_parameter %>%
-    filter(id == id_i, item == target_item) %>%
-    pull(transformation)
-  params <- trend_parameter %>%
-    filter(id == id_i, item == target_item) %>%
-    pull(params)
-  if (is_matrix){
-    preds <- undo_diff_and_detrend_matrix(preds, counters, transformation, params)
-  } else {
-    preds <- undo_diff_and_detrend_single(preds, counters, transformation, params)
-  }
-  
-  return(preds)
-}
-
-# Plots
-# Histogram
-histogram_rmse <- function(df,
-                      metric_col,
-                      xlab,
-                      method_levels,
-                      palette = NULL,
-                      show_y_labels = TRUE) {
-  
-  df_m <- df |>
+histogram_rmse <- function(df, metric_col, xlab, method_levels, palette=NULL, show_y_labels=TRUE) {
+  df_m <- df %>%
     dplyr::transmute(
       Method = factor(Method, levels = method_levels),
       value  = .data[[metric_col]]
-    ) |>
+    ) %>%
     dplyr::filter(!is.na(value))
   
   p <- ggplot2::ggplot(
@@ -831,8 +703,109 @@ histogram_rmse <- function(df,
       ggplot2::scale_fill_manual(values = palette, drop = FALSE) +
       ggplot2::scale_color_manual(values = palette, drop = FALSE)
   }
-  
-  p
+  return(p)
 }
 
 
+
+
+plot_interpolated_examples <- function(example_ids, raw_data_long, data_long_hpo, target_item) {
+  for (id_i in unique(data_long_hpo$id)) {
+    # Raw with NAs
+    df_raw <- raw_data_long %>%
+      dplyr::filter(id == id_i, item == target_item) %>%
+      dplyr::select(counter, value_raw = value) %>%
+      dplyr::arrange(counter)
+    
+    # Imputed
+    df_imp <- data_long_hpo %>%
+      dplyr::filter(id == id_i, item == target_item) %>%
+      dplyr::select(counter, value_imp = value) %>%
+      dplyr::arrange(counter)
+    
+    # Align by counter 
+    df_plot <- dplyr::left_join(df_raw, df_imp, by = "counter") %>%
+      dplyr::arrange(counter)
+    
+    if (any(is.na(df_plot$value_raw))) {
+      print(
+        ggplot_na_imputations(
+          x_with_na = df_plot$value_raw,
+          x_with_imputations = df_plot$value_imp,
+          title = paste("ID", id_i, target_item),
+          xlab = "Counter",
+          ylab = "Value"
+        )
+      )
+    }
+  }
+}
+
+
+
+create_overfitting_plot <- function(train_metrics, test_metrics, outcome_SD_train, outcome_SD_test) {
+  # Merge RMSEs and SDs for train and test
+  combined_metrics <- train_metrics %>%
+    select(id, RMSE) %>% rename(RMSE_Train = RMSE) %>%
+    inner_join(
+      test_metrics %>% select(id, RMSE) %>% rename(RMSE_Test = RMSE),
+      by = "id"
+    ) %>%
+    inner_join(
+      outcome_SD_train, 
+      by = "id"
+    ) %>%
+    rename(outcome_SD_train = SD) %>%
+    inner_join(
+      outcome_SD_test, 
+      by = "id"
+    ) %>%
+    rename(outcome_SD_test = SD)
+  
+  # Sort ascending by RMSE_test
+  combined_metrics <- combined_metrics %>%
+    arrange(RMSE_Test) %>%                    
+    mutate(id = factor(id, levels = id))
+  
+  # Convert to long format for plotting
+  long_metrics <- combined_metrics %>%
+    pivot_longer(
+      cols = c(RMSE_Train, RMSE_Test, outcome_SD_train, outcome_SD_test),
+      names_to = "Metric",
+      values_to = "Value"
+    )
+  
+  # Plot x
+  overfitting <- ggplot(long_metrics, aes(x = factor(id), y = Value, fill = Metric)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(x = "ID", y = "Value") +
+    scale_fill_manual(
+      values = c(
+        "RMSE_Train" = "dodgerblue3",
+        "RMSE_Test"  = "indianred1",
+        "outcome_SD_train" = "black",
+        "outcome_SD_test" = "grey"),
+      labels = c(
+        "RMSE_Train" = "RMSE (Train)",
+        "RMSE_Test"  = "RMSE (Test)",
+        "outcome_SD_train" = "SD Outcome (Train)",
+        "outcome_SD_test"  = "SD Outcome (Test)"
+      )) +
+    theme_minimal() +
+    theme(
+      legend.position = c(0, 1),
+      legend.justification = c(0, 1),
+      legend.background = element_rect(fill = "white", color = "black"),
+      legend.title = element_text(size = 12),
+      legend.text = element_text(size = 11)
+    )
+  return(overfitting)
+}
+
+
+#----------------------------------------------------------------------------------------------------
+#-------------------------------------- Other Utilities ---------------------------------------------
+#----------------------------------------------------------------------------------------------------
+
+# For safe plotnames
+safe_name <- function(x) gsub("[^A-Za-z0-9]+", "_", x)
