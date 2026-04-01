@@ -29,13 +29,11 @@ random_seed <- 47
 set.seed(random_seed)
 
 # Load file with additional, outsourced functions
-functions_file_path <- "./functions_MLM.R"
-#functions_file_path <- "git-ordner/Person-Specific-Forecasting-of-Experience-Sampling-Data/functions_MLM.R"
+functions_file_path <- "git-ordner/Person-Specific-Forecasting-of-Experience-Sampling-Data/functions_MLM.R"
 source(functions_file_path)
 
 # Define output path and create output dir
-figures_output_dir <- "./figures/"
-#figures_output_dir <- "/Users/cameri/Desktop/Psychologie-Master/Masterarbeit/Masterarbeit2.0/Latex-Code/Figures/"
+figures_output_dir <- "/Users/cameri/Desktop/Psychologie-Master/Masterarbeit/Masterarbeit2.0/Latex-Code/Figures/"
 dir.create(figures_output_dir, showWarnings = FALSE)
 
 # Load dataset from openesm or from RData file

@@ -43,15 +43,25 @@ interpolate <- function(df, counters, interpolation_type = "spline", min_value =
       dplyr::ungroup()
     
   } else if (interpolation_type == "Kalman") {
-    df_inter <- df %>%
-      dplyr::group_by(id, item) %>%
-      dplyr::mutate(
-        value = if (any(counter %in% counters)) {
-          v <- value
-          trainsplit <- counter %in% counters
-          v[trainsplit] <- suppressWarnings(imputeTS::na_kalman(
-            v[trainsplit]
-          ))
+  df_inter <- df %>%
+  dplyr::group_by(id, item) %>%
+    dplyr::mutate(
+     value = if (any(counter %in% counters)) {
+       v <- value
+      trainsplit <- counter %in% counters
+ #        v[trainsplit] <- suppressWarnings(imputeTS::na_kalman(
+ #          v[trainsplit]
+ #        ))
+    # Kalman Filter can run into convergence problems due to limited or low variance data
+    # fall back to linear interpolation in case that happens
+    v[trainsplit] <- tryCatch(
+      suppressWarnings(
+        imputeTS::na_kalman(v[trainsplit], model = "StructTS")
+      ),
+      error = function(e) {
+        zoo::na.approx(v[trainsplit], na.rm = FALSE)
+      }
+    )
           v
         } else {
           value
