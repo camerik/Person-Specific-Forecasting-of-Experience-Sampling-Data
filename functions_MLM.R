@@ -49,19 +49,20 @@ interpolate <- function(df, counters, interpolation_type = "spline", min_value =
      value = if (any(counter %in% counters)) {
        v <- value
       trainsplit <- counter %in% counters
- #        v[trainsplit] <- suppressWarnings(imputeTS::na_kalman(
- #          v[trainsplit]
- #        ))
+         v[trainsplit] <- suppressWarnings(imputeTS::na_kalman(
+           v[trainsplit]
+        )
+      )
     # Kalman Filter can run into convergence problems due to limited or low variance data
     # fall back to linear interpolation in case that happens
-    v[trainsplit] <- tryCatch(
-      suppressWarnings(
-        imputeTS::na_kalman(v[trainsplit], model = "StructTS")
-      ),
-      error = function(e) {
-        zoo::na.approx(v[trainsplit], na.rm = FALSE)
-      }
-    )
+ #  v[trainsplit] <- tryCatch(
+ #    suppressWarnings(
+ #      imputeTS::na_kalman(v[trainsplit], model = "StructTS")
+ #    ),
+ #    error = function(e) {
+ #      zoo::na.approx(v[trainsplit], na.rm = FALSE)
+ #    }
+ #  )
           v
         } else {
           value

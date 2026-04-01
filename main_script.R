@@ -329,8 +329,8 @@ mean(data_long_hpo_dd_std %>%
 
 
 #-------------------------------- Prepare Data for Eval ------------------------------------------------------
-# Interpolate
-data_long_eval <- interpolate(raw_data_long, train_val_counters, interpolation_type)
+# Do not interpolate again, since there are no missing values in the validation set 
+data_long_eval <- data_long_hpo 
 
 # Check if there are any NAs left
 sum(is.na(data_long_eval %>% filter(counter %in% train_val_counters)))
@@ -1802,9 +1802,9 @@ worst_id <- difficulty %>% slice_max(mean_rank, n = 1)
 median_val <- median(difficulty$mean_rank)
 typical_id <- difficulty %>%
   mutate(dist = abs(mean_rank - median_val)) %>%
-  slice_min(dist, n = 1) %>%
+  slice_min(dist, n = 2) %>%
   select(id, mean_rank) %>%
-  slice(1)
+  slice(2)
 
 list(
   best    = best_id,
