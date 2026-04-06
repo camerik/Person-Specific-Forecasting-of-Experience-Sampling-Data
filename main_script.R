@@ -1856,11 +1856,9 @@ ylim_min <- min(ylim_min, 0) - 1
 ylim_max <- max(ylim_max, 100) + 1
 
 
-
 #----------------------------- Create Plots ----------------------------------------------------------
-#----------------------------- Create Plots ----------------------------------------------------------
-# Calculate ylim plots
-limits_per_id <- list()
+# Calculate person-specific ylim 
+ylim_per_id <- list()
 for (id_i in representative_ids) {
   y_test <- (data_long_eval %>% 
                dplyr::filter(id == id_i, counter %in% train_val_counters, item == target_item))$value
@@ -1886,15 +1884,15 @@ for (id_i in representative_ids) {
   ylim_min <- ylim_min - 1
   ylim_max <- ylim_max + 1
   
-  limits_per_id <- append(limits_per_id, list(ylim_min, ylim_max))
+  ylim_per_id <- append(ylim_per_id, list(ylim_min, ylim_max))
 }
 
 
 
 for (id_i in representative_ids) {
   # Extract limits
-  ylim_min <- limits_per_id[[2*match(id_i, representative_ids)-1]]
-  ylim_max <- limits_per_id[[2*match(id_i, representative_ids)]]
+  ylim_min <- ylim_per_id[[2*match(id_i, representative_ids)-1]]
+  ylim_max <- ylim_per_id[[2*match(id_i, representative_ids)]]
   
   # Extract training + test predictions 
   y_train <- (data_long_eval %>% 
@@ -1946,8 +1944,8 @@ for (i in seq(1, 5)) {
   
   for (id_i in representative_ids) {
     # extract limits for plot
-    ylim_min <- limits_per_id[[2*match(id_i, representative_ids)-1]]
-    ylim_max <- limits_per_id[[2*match(id_i, representative_ids)]]
+    ylim_min <- ylim_per_id[[2*match(id_i, representative_ids)-1]]
+    ylim_max <- ylim_per_id[[2*match(id_i, representative_ids)]]
     
     # Extract training + test predictions for this ID
     y_train <- (data_long_eval %>% dplyr::filter(id == id_i, counter %in% val_counters, item == target_item))$value
