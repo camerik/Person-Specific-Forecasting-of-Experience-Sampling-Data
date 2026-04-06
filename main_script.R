@@ -96,8 +96,6 @@ beep_feature_names = setdiff(colnames(raw_data), c("id", "counter", "sin_weekday
 daily_feature_names = c("sin_weekday", "cos_weekday", "sleep_quality", "day")
 features_to_lag = setdiff(colnames(raw_data), c("id", "counter", "sin_weekday", "cos_weekday", "day", "beep", "sleep_quality"))
 
-
-
 # ---------------------------- Low Variance -----------------------------------------------------------------------------------
 # Check for and exclude ids with low variance: 
 # Low Variance Definition: Either variance < 1 or ≥ 10 unique answer categories
@@ -257,7 +255,7 @@ range_answer_cat =  raw_data %>%
   unlist() %>%
   range(na.rm = TRUE)
 
-# Calculate in-person statistics and plot counts of answers per item over all ids (Westhoff et al., 2024)
+# Calculate in-person statistics and plot counts of response categories for outcome variable "depressed"
 data_statistics <- raw_data_long %>%
   dplyr::group_by(id, item) %>%
   dplyr::summarise(
@@ -266,18 +264,52 @@ data_statistics <- raw_data_long %>%
     .groups = "drop"
   )
 
-# Plot
-for (id_i in unique(raw_data_long$id)) {
-  print(raw_data_long %>%
-    dplyr::filter(., id == id_i) %>%
-    dplyr::filter(item %in% features_to_lag) %>%
-    ggplot(aes(x = value)) +
-    ggtitle(paste("ID:",id_i)) +
-    geom_histogram(bins = 20, na.rm = TRUE) +
-    facet_wrap(~ item) +
-    theme_classic())
-}
+ggplot(
+  raw_data_long %>%
+    dplyr::filter(item == "depressed", !is.na(value)),
+  aes(x = value)
+) +
+  geom_histogram(bins = 10, na.rm = TRUE, fill = "dodgerblue3") +
+  facet_wrap(~ id) +
+  labs(
+    x = "Response value",
+    y = "Count"
+  ) +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 12),
+    strip.text = element_text(size = 12)
+  )
 
+# Calculate and plot counts of answers for item depressed 
+depressed_data <- raw_data_long %>%
+  dplyr::filter(item == "depressed", !is.na(value))
+
+median(depressed_data$value)
+IQR(depressed_data$value)
+
+# Plot
+descriptives <- ggplot(depressed_data, aes(x = value)) +
+  geom_histogram(binwidth = 5, boundary = 0, closed = "left", fill = "dodgerblue3") +
+  labs(
+    x = "Response value",
+    y = "Count"
+  ) +
+  theme_classic() + 
+  theme(
+    axis.title = element_text(size = 20),
+    axis.text = element_text(size = 18)
+  )
+
+plot(descriptives)
+ggsave(
+  filename = paste0(figures_output_dir, "descriptives.pdf"),
+  plot     = descriptives,
+  width    = 10,
+  height   = 6,
+  dpi      = 300
+)
 
 
 #------------------------------- Prepare Data for HPO --------------------------------------------------
@@ -699,7 +731,7 @@ for (id_i in unique(df_hpo$id)) {
   train_metrics_enr <- bind_rows(train_metrics_enr, train_metrics_i)
   
   # Sensitivity Analysis
-  sensitivity_results_i <- sensitivity_analysis(preds, y_test, test_counter, id_i, n_lags_i)
+  sensitivity_results_i <- sensitivity_analysis(preds, y_test, test_counters, id_i, n_lags_i)
   sensitivity_results_enr <- bind_rows(sensitivity_results_enr, sensitivity_results_i)
 }
 
@@ -1283,7 +1315,7 @@ for (id_i in unique(df_hpo$id)) {
     y_pred_train = preds_train
   ))
   
-  sensitivity_results_i <- sensitivity_analysis(median_preds, y_test, test_counter, id_i, n_lags_i)
+  sensitivity_results_i <- sensitivity_analysis(median_preds, y_test, test_counters, id_i, n_lags_i)
   sensitivity_results_rfr <- bind_rows(sensitivity_results_rfr, sensitivity_results_i)
 }
 
@@ -1816,12 +1848,57 @@ list(
 representative_ids <- c(best_id$id, typical_id$id, worst_id$id)
 representative_ids
 
+# Calculate ylim plots
+ylim_min <- min(min(test_predictions_ar$pred_lower), min(test_predictions_boot$pred_lower), min(test_predictions_resid_boot$pred_lower), min(test_predictions_block_boot$pred_lower), min(test_predictions_rfr$pred_lower))
+ylim_max <- max(max(test_predictions_ar$pred_lower), max(test_predictions_boot$pred_lower), max(test_predictions_resid_boot$pred_lower), max(test_predictions_block_boot$pred_lower), max(test_predictions_rfr$pred_lower))
+
+ylim_min <- min(ylim_min, 0) - 1
+ylim_max <- max(ylim_max, 100) + 1
+
 
 
 #----------------------------- Create Plots ----------------------------------------------------------
+#----------------------------- Create Plots ----------------------------------------------------------
+# Calculate ylim plots
+limits_per_id <- list()
 for (id_i in representative_ids) {
+  y_test <- (data_long_eval %>% 
+               dplyr::filter(id == id_i, counter %in% train_val_counters, item == target_item))$value
+  
+  ylim_min <- min(
+    min((test_predictions_ar %>% dplyr::filter(id == id_i))$pred_lower), 
+    min((test_predictions_boot %>% dplyr::filter(id == id_i))$pred_lower),  
+    min((test_predictions_resid_boot %>% dplyr::filter(id == id_i))$pred_lower), 
+    min((test_predictions_block_boot %>% dplyr::filter(id == id_i))$pred_lower),  
+    min((test_predictions_rfr %>% dplyr::filter(id == id_i))$pred_lower),
+    min((y_test))
+  )
+  
+  ylim_max <- max(
+    max((test_predictions_ar %>% dplyr::filter(id == id_i))$pred_upper), 
+    max((test_predictions_boot %>% dplyr::filter(id == id_i))$pred_upper),  
+    max((test_predictions_resid_boot %>% dplyr::filter(id == id_i))$pred_upper), 
+    max((test_predictions_block_boot %>% dplyr::filter(id == id_i))$pred_upper),  
+    max((test_predictions_rfr %>% dplyr::filter(id == id_i))$pred_upper),
+    max((y_test))
+  )
+  
+  ylim_min <- ylim_min - 1
+  ylim_max <- ylim_max + 1
+  
+  limits_per_id <- append(limits_per_id, list(ylim_min, ylim_max))
+}
+
+
+
+for (id_i in representative_ids) {
+  # Extract limits
+  ylim_min <- limits_per_id[[2*match(id_i, representative_ids)-1]]
+  ylim_max <- limits_per_id[[2*match(id_i, representative_ids)]]
+  
   # Extract training + test predictions 
-  y_train <- (data_long_eval %>% dplyr::filter(., id == id_i, counter %in% train_val_counters, item == target_item))$value
+  y_train <- (data_long_eval %>% 
+                dplyr::filter(id == id_i, counter %in% train_val_counters, item == target_item))$value
   n_train <- length(y_train)
   
   # Historical data frame
@@ -1846,13 +1923,10 @@ for (id_i in representative_ids) {
     ) +
     labs(
       x = "Time step",
-      y = "Target value",
-      color = "",
-      fill  = "",
-      size=20
+      y = "Target value"
     ) +
     theme_minimal() +
-    ylim(0, 100) +
+    coord_cartesian(ylim = c(ylim_min, ylim_max)) +
     theme(axis.text = element_text(size=12), axis.title = element_text(size=14))
   
   # Print and safe each plot
@@ -1862,6 +1936,8 @@ for (id_i in representative_ids) {
     plot = forecast_plot, width = 4, height = 3)
 }
 
+
+
 # Loop for different bootstrap variations
 for (i in seq(1, 5)) {
   name_i <- names[[i]]
@@ -1869,6 +1945,10 @@ for (i in seq(1, 5)) {
   preds_i <- predictions[[i]]
   
   for (id_i in representative_ids) {
+    # extract limits for plot
+    ylim_min <- limits_per_id[[2*match(id_i, representative_ids)-1]]
+    ylim_max <- limits_per_id[[2*match(id_i, representative_ids)]]
+    
     # Extract training + test predictions for this ID
     y_train <- (data_long_eval %>% dplyr::filter(id == id_i, counter %in% val_counters, item == target_item))$value
     y_obs  <- (preds_i %>% dplyr::filter(id == id_i))$y_obs
@@ -1915,6 +1995,12 @@ for (i in seq(1, 5)) {
         linewidth = 1
       ) +
       geom_point(
+        data = df_test,
+        aes(x = time, y = y_preds), 
+        color = "indianred1",
+        shape = 16
+      ) +
+      geom_point(
         data = df_hist,
         aes(x = time, y = y_obs), 
         color = "grey40",
@@ -1949,12 +2035,10 @@ for (i in seq(1, 5)) {
       ) +
       labs(
         x = "Time step",
-        y = "Target value",
-        color = "",
-        fill  = "",
-        size=20
+        y = "Target value"
       ) +
       theme_minimal() +
+      coord_cartesian(ylim = c(ylim_min, ylim_max)) +
       theme(axis.text = element_text(size=12), axis.title = element_text(size=14))
     
     # Print and safe each plot
@@ -1964,5 +2048,3 @@ for (i in seq(1, 5)) {
       plot = forecast_plot, width = 4, height = 3)
   }
 }
-# TODO: In diskussion beschreiben dass zusammenhang zwischen features und target nicht richtig geschätzt wurde bei den personen die nicht funktioneirne
-# ABER: auch mit random forests nicht und diese nehemen keinen linearen zusammenhang an! residual plots in trainingsset anschauen --------------------------------------------------

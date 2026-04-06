@@ -654,16 +654,22 @@ statistic_forecast <- function(tseries, X_test, alpha, lambda, mean___, sd___, t
 #----------------------------------------------------------------------------------------------------
 #---------------------------------- Analysis Functions ----------------------------------------------
 #----------------------------------------------------------------------------------------------------
-
-sensitivity_analysis <- function(y_pred, y_test, test_counter, id_i, n_lags_i) {
+sensitivity_analysis <- function(y_pred, y_test, test_counters, id_i, n_lags_i) {
   errors_df <- tibble(
     id = id_i,
     counter = test_counters,
     y_true = as.numeric(y_test),
     y_pred = as.numeric(y_pred),
   ) %>%
+    mutate(row_id = row_number()) %>%
+    # Keep only first and last n_lags_i observations
+    filter(row_id <= n_lags_i | row_id > (n() - n_lags_i)) %>%
     mutate(
-      zone = if_else(row_number() <= n_lags_i, "leakage_zone", "clean_zone") 
+      zone = if_else(
+        row_id <= n_lags_i,
+        "leakage_zone",
+        "clean_zone"
+      ) 
     )
   
   # Fehler (RMSE) pro Zone
@@ -676,6 +682,7 @@ sensitivity_analysis <- function(y_pred, y_test, test_counter, id_i, n_lags_i) {
   
   return(zone_metrics)
 }
+
 
 #----------------------------------------------------------------------------------------------------
 #-------------------------------------- Plot Functions ----------------------------------------------
